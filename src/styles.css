@@ -195,7 +195,7 @@ button { color: inherit; }
   .opportunities { padding: 48px 0 63px; }
   .section-heading { align-items: start; }
   .section-heading h2 { font-size: 24px; }
-  .section-heading > .button { display: none; }
+  .opportunities .section-heading > .button { display: none; }
   .job-grid { grid-template-columns: 1fr; }
   .job-card { padding: 18px; }
 }
@@ -305,6 +305,7 @@ button { color: inherit; }
   .account-actions__name { max-width: calc(100% - 16px); }
   .site-header .button { min-height: 44px; font-size: 11px; }
   .section-heading { align-items: flex-start; flex-direction: column; }
+  .employer-post-button { width: 100%; }
   .section-heading .search-field { width: 100%; max-width: none; }
   .form-grid { grid-template-columns: 1fr; }
   .admin-stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }

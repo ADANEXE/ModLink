@@ -27,7 +27,7 @@ export function EmployerPanel({ user, profile, jobs, applications, conversations
           <h2>Manage your listings</h2>
           <p className="section-heading__copy">Post a role and review people who apply.</p>
         </div>
-        <button className="button button--primary" onClick={() => setShowForm(!showForm)} disabled={isSuspended}>
+        <button className="button button--primary employer-post-button" onClick={() => setShowForm(!showForm)} disabled={isSuspended}>
           {isSuspended ? 'Posting suspended' : showForm ? 'Close form' : '＋ Post a role'}
         </button>
       </div>
