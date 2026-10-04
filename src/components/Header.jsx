@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 export default function Header({
   user,
   displayName,
@@ -10,6 +12,7 @@ export default function Header({
   onSignOut,
   authBusy,
 }) {
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const navigation = [
     { id: 'opportunities', label: 'Find a role' },
     ...(user ? [
@@ -27,13 +30,30 @@ export default function Header({
         <span className="brand__mark" aria-hidden="true">M</span>
         <span>mod<span className="brand__accent">link</span></span>
       </button>
-      <nav className="site-header__nav" aria-label="Main navigation">
+      <button
+        className="mobile-menu-toggle"
+        type="button"
+        aria-expanded={mobileMenuOpen}
+        aria-controls="site-navigation"
+        onClick={() => setMobileMenuOpen((open) => !open)}
+      >
+        <span aria-hidden="true">{mobileMenuOpen ? '×' : '☰'}</span>
+        <span>{mobileMenuOpen ? 'Close menu' : 'Menu'}</span>
+      </button>
+      <nav
+        className={`site-header__nav${mobileMenuOpen ? ' is-mobile-open' : ''}`}
+        id="site-navigation"
+        aria-label="Main navigation"
+      >
         <div className="main-nav">
           {navigation.map((item) => (
             <button
               className={`site-header__link${activeView === item.id ? ' is-active' : ''}`}
               key={item.id}
-              onClick={() => onNavigate(item.id)}
+              onClick={() => {
+                onNavigate(item.id);
+                setMobileMenuOpen(false);
+              }}
             >
               {item.label}
               {item.badge > 0 && <span className="nav-count">{item.badge > 99 ? '99+' : item.badge}</span>}

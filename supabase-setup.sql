@@ -64,6 +64,7 @@ create table if not exists public.moderation_reports (
   chat_excerpt jsonb not null default '[]'::jsonb,
   reporter_id uuid not null references public.profiles (id) on delete cascade,
   reason text not null check (char_length(reason) between 10 and 1000),
+  staff_reply text,
   status text not null default 'pending' check (status in ('pending', 'reviewed', 'dismissed')),
   created_at timestamptz not null default now(),
   resolved_by uuid references public.profiles (id) on delete set null,
@@ -693,7 +694,7 @@ begin
   if new_status not in ('reviewed', 'dismissed') then
     raise exception 'Invalid report status';
   end if;
-  if staff_reply is null or char_length(trim(staff_reply)) < 3 or char_length(staff_reply) > 1500 then
+  if $3 is null or char_length(trim($3)) < 3 or char_length($3) > 1500 then
     raise exception 'A reply between 3 and 1500 characters is required';
   end if;
   select * into report_row
@@ -706,7 +707,7 @@ begin
   select role_title into listing_title from public.job_listings where id = report_row.job_id;
 
   update public.moderation_reports
-  set status = new_status, staff_reply = trim(staff_reply), resolved_by = auth.uid(), resolved_at = now()
+  set status = new_status, staff_reply = trim($3), resolved_by = auth.uid(), resolved_at = now()
   where id = target_report_id;
 
   insert into public.notifications (user_id, actor_id, type, title, body, link_type, link_id)
@@ -715,7 +716,7 @@ begin
     auth.uid(),
     'report_update',
     case when new_status = 'dismissed' then 'Report reviewed' else 'Action taken on your report' end,
-    coalesce(listing_title, case when report_row.report_type = 'chat' then 'A reported chat conversation' else 'The reported listing' end) || ': ' || trim(staff_reply),
+    coalesce(listing_title, case when report_row.report_type = 'chat' then 'A reported chat conversation' else 'The reported listing' end) || ': ' || trim($3),
     case when report_row.report_type = 'chat' then 'chat' else 'listing' end,
     case when report_row.report_type = 'chat' then report_row.conversation_id else report_row.job_id end
   );
@@ -727,7 +728,7 @@ begin
     jsonb_build_object(
       'report_id', target_report_id,
       'report_type', report_row.report_type,
-      'staff_reply', trim(staff_reply)
+      'staff_reply', trim($3)
     )
   );
 end;
@@ -1313,3 +1314,39 @@ select cron.schedule(
 );
 
 -- Levels 0-6: User, Trial Mod, Jr Mod, Mod, Sr Mod, Sr Admin, Owner.
+
+with required_tables(table_name) as (
+  values
+    ('profiles'),
+    ('job_listings'),
+    ('applications'),
+    ('moderation_reports'),
+    ('moderation_warnings'),
+    ('site_settings'),
+    ('notifications'),
+    ('chat_conversations'),
+    ('chat_messages'),
+    ('staff_action_log')
+)
+select
+  table_name,
+  to_regclass(format('public.%I', table_name)) is not null as exists_in_public_schema
+from required_tables
+order by table_name;
+
+select table_name, column_name, data_type, is_nullable, column_default
+from information_schema.columns
+where table_schema = 'public'
+  and table_name in (
+    'profiles',
+    'job_listings',
+    'applications',
+    'moderation_reports',
+    'moderation_warnings',
+    'site_settings',
+    'notifications',
+    'chat_conversations',
+    'chat_messages',
+    'staff_action_log'
+  )
+order by table_name, ordinal_position;

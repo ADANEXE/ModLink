@@ -12,7 +12,7 @@ A React/Vite Discord staff and moderator hiring hub using Supabase Auth and Post
    VITE_SUPABASE_ANON_KEY=your-anon-key
    ```
 
-3. In the Supabase SQL Editor, run the complete `supabase-setup.sql` script. It is safe to rerun and includes profile backfill for existing accounts.
+3. In the Supabase SQL Editor, run the complete `supabase-setup.sql` script. It is safe to rerun and includes profile backfill for existing accounts. The final query lists each required app table and confirms whether it exists in `public`: `profiles`, `job_listings`, `applications`, `moderation_reports`, `moderation_warnings`, `site_settings`, `notifications`, `chat_conversations`, `chat_messages`, and `staff_action_log`. Supabase-managed `auth.users` and the `pg_cron` extension are not app tables created by this script.
 4. In Supabase **Authentication → Providers**, enable Discord and add the Discord OAuth client credentials. Add `http://localhost:5173` (or your deployed site URL) to the Supabase **Authentication → URL Configuration → Redirect URLs**.
 5. Run `npm run dev`.
 
