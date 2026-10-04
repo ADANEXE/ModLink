@@ -236,7 +236,7 @@ export default function App() {
     setMessage('');
     const { error } = await supabaseClient.auth.signInWithOAuth({
       provider: 'discord',
-      options: { redirectTo: window.location.origin },
+      options: { redirectTo: `${window.location.origin}${import.meta.env.BASE_URL}` },
     });
     if (error) setMessage(`Discord sign-in failed: ${error.message}`);
     setAuthBusy(false);
