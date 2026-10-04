@@ -20,7 +20,7 @@ The site supports browsing open listings, Discord sign-in, applying to roles, tr
 
 ### GitHub Pages deployment
 
-The `Deploy frontend to GitHub Pages` workflow deploys the `main` branch to https://adanexe.github.io/ModLink/. Add the repository Actions secrets `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` under **Settings → Secrets and variables → Actions** before relying on Supabase features. Then add `https://adanexe.github.io/ModLink/` to the Supabase Authentication redirect URL allow-list and configure the Discord OAuth provider redirect URLs as required by Supabase. The local `.env` is ignored by Git and must never be committed.
+The `Deploy frontend to GitHub Pages` workflow deploys the `main` branch to https://adanexe.github.io/ModLink/. Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` under **Settings → Secrets and variables → Actions** as repository secrets or variables. The workflow accepts either type and fails with a clear error if either setting is missing. These Vite values are embedded in the public frontend bundle; use only a Supabase publishable/anon key, never a service-role key. Then add `https://adanexe.github.io/ModLink/` to the Supabase Authentication redirect URL allow-list and configure the Discord OAuth provider redirect URLs as required by Supabase. The local `.env` is ignored by Git and must never be committed.
 
 ### Staff permissions
 
