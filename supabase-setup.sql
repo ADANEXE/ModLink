@@ -631,9 +631,9 @@ begin
   end if;
   if duration_hours <> 0
     and (
-      suspension_reason is null
-      or char_length(trim(suspension_reason)) < 3
-      or char_length(suspension_reason) > 1000
+      $3 is null
+      or char_length(trim($3)) < 3
+      or char_length($3) > 1000
     ) then
     raise exception 'Suspension reason must be between 3 and 1000 characters';
   end if;
@@ -652,7 +652,7 @@ begin
         when duration_hours <= 0 then null
         else now() + make_interval(hours => duration_hours)
       end,
-      suspension_reason = case when duration_hours = 0 then null else trim(suspension_reason) end
+      suspension_reason = case when duration_hours = 0 then null else trim($3) end
   where id = target_user_id;
 
   insert into public.notifications (user_id, actor_id, type, title, body)
@@ -661,14 +661,14 @@ begin
     auth.uid(),
     case when duration_hours = 0 then 'suspension_lifted' else 'account_suspension' end,
     case when duration_hours = 0 then 'Account suspension lifted' else 'Account temporarily restricted' end,
-    case when duration_hours = 0 then 'A staff member lifted the restriction on your account.' else 'Reason: ' || trim(suspension_reason) end
+    case when duration_hours = 0 then 'A staff member lifted the restriction on your account.' else 'Reason: ' || trim($3) end
   );
   perform public.record_staff_action(
     case when duration_hours = 0 then 'member_unsuspended' else 'member_suspended' end,
     target_user_id,
     target_name,
     null,
-    jsonb_build_object('duration_hours', duration_hours, 'reason', nullif(trim(suspension_reason), ''))
+    jsonb_build_object('duration_hours', duration_hours, 'reason', nullif(trim($3), ''))
   );
 end;
 $$;
