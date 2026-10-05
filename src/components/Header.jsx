@@ -16,6 +16,7 @@ export default function Header({
   const navigation = [
     { id: 'opportunities', label: 'Find a role' },
     ...(user ? [
+      { id: 'profile', label: 'My profile' },
       { id: 'applications', label: 'My applications' },
       { id: 'employer', label: 'Employer tools' },
       { id: 'notifications', label: 'Inbox', badge: unreadCount },

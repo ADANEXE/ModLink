@@ -16,7 +16,9 @@ A React/Vite Discord staff and moderator hiring hub using Supabase Auth and Post
 4. In Supabase **Authentication → Providers**, enable Discord and add the Discord OAuth client credentials. Add `http://localhost:5173` (or your deployed site URL) to the Supabase **Authentication → URL Configuration → Redirect URLs**.
 5. Run `npm run dev`.
 
-The site supports browsing open listings, Discord sign-in, applying to roles, tracking applications, publishing and managing listings, a tiered moderation workspace, account notifications, private lister/applicant chats, and Owner-controlled maintenance mode.
+The site supports browsing open listings, Discord sign-in, applying to roles, a personal dashboard with an editable introduction and portfolio link, tracking applications, publishing and managing listings, a searchable tiered moderation workspace, account notifications, private lister/applicant chats, and Owner-controlled maintenance mode. Applicants can share their profile bio and portfolio link with listing owners alongside applications.
+
+The public landing page includes a search-focused title and description, Open Graph metadata, WebSite structured data, a crawler policy, sitemap, and branded favicon. These improve technical discoverability but cannot guarantee search placement; rankings also depend on search-engine indexing, external references, content quality, and competition.
 
 ### GitHub Pages deployment
 

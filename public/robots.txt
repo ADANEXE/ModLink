@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://adanexe.github.io/ModLink/sitemap.xml

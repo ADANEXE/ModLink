@@ -25,10 +25,10 @@ function formatAuditValue(value) {
   return JSON.stringify(value);
 }
 
-function PermissionSection({ minLevel, profile, title, description, children }) {
+function PermissionSection({ id, minLevel, profile, title, description, children }) {
   return (
     <AdminGuard minLevel={minLevel} profile={profile}>
-      <section className="admin-subsection">
+      <section className="admin-subsection" id={id}>
         <div className="subsection-heading"><h3>{title}</h3><span>Level {minLevel}+</span></div>
         {description && <p className="admin-subsection__description">{description}</p>}
         {children}
@@ -43,7 +43,6 @@ export default function AdminPanel({
   jobs,
   reports,
   staffActions,
-  applications,
   settings,
   onCloseListing,
   onDeleteListing,
@@ -64,9 +63,40 @@ export default function AdminPanel({
   const [selectedListing, setSelectedListing] = useState(null);
   const [suspendHours, setSuspendHours] = useState('24');
   const [saving, setSaving] = useState(false);
+  const [reportStatus, setReportStatus] = useState('pending');
+  const [reportType, setReportType] = useState('all');
+  const [reportSearch, setReportSearch] = useState('');
+  const [listingStatus, setListingStatus] = useState('all');
+  const [listingSearch, setListingSearch] = useState('');
+  const [memberSearch, setMemberSearch] = useState('');
   const rank = currentProfile?.admin_level ?? 0;
   const canAssign = (member) => member.id !== currentProfile?.id
     && (rank === 6 ? member.admin_level <= 5 : member.admin_level <= 3);
+  const pendingReports = reports.filter((report) => report.status === 'pending').length;
+  const openListings = jobs.filter((job) => job.status === 'open').length;
+  const filteredReports = reports.filter((report) => {
+    if (reportStatus !== 'all' && report.status !== reportStatus) return false;
+    if (reportType !== 'all' && report.report_type !== reportType) return false;
+    const query = reportSearch.trim().toLowerCase();
+    if (!query) return true;
+    return [
+      report.reason,
+      report.job_listings?.role_title,
+      report.job_listings?.server_name,
+      report.conversation?.job?.role_title,
+      report.conversation?.job?.server_name,
+      report.profiles?.username,
+      report.reported_user?.username,
+    ].some((value) => value?.toLowerCase().includes(query));
+  });
+  const filteredListings = jobs.filter((job) => {
+    if (listingStatus !== 'all' && job.status !== listingStatus) return false;
+    const query = listingSearch.trim().toLowerCase();
+    return !query || `${job.role_title} ${job.server_name}`.toLowerCase().includes(query);
+  });
+  const filterMembers = (members) => members.filter((member) =>
+    `${member.username} ${member.discord_id || ''}`.toLowerCase().includes(memberSearch.trim().toLowerCase()),
+  );
 
   useEffect(() => {
     setAnnouncement(settings.announcement || '');
@@ -106,15 +136,33 @@ export default function AdminPanel({
         </div>
         <span className="admin-level-pill">Level {rank} · {ROLES[rank]}</span>
       </div>
-      <div className="admin-stat-grid">
-        <div className="panel admin-stat"><span>Open reports</span><strong>{reports.filter((report) => report.status === 'pending').length}</strong></div>
-        <div className="panel admin-stat"><span>Listings</span><strong>{jobs.length}</strong></div>
-        <div className="panel admin-stat"><span>Applications</span><strong>{applications.length}</strong></div>
+      <div className={`admin-stat-grid${rank < 5 ? ' admin-stat-grid--compact' : ''}`}>
+        <a className="panel admin-stat" href="#admin-reports"><span>Needs review</span><strong>{pendingReports}</strong><small>Open moderation queue →</small></a>
+        <div className="panel admin-stat"><span>Your access</span><strong>{rank}</strong><small>{ROLES[rank]}</small></div>
+        {rank >= 2 && <a className="panel admin-stat" href="#admin-listings"><span>Open listings</span><strong>{openListings}</strong><small>Review job posts →</small></a>}
+        {rank >= 3 && <a className="panel admin-stat" href="#admin-members"><span>Staff & members</span><strong>{profiles.length}</strong><small>Open member tools →</small></a>}
+        {rank >= 5 && <a className="panel admin-stat" href="#admin-audit"><span>Staff actions · 30 days</span><strong>{staffActions.length}</strong><small>Review audit trail →</small></a>}
       </div>
 
-      <PermissionSection minLevel={1} profile={currentProfile} title="Moderation queue" description="Review user reports about listings and private chats.">
+      <PermissionSection id="admin-reports" minLevel={1} profile={currentProfile} title="Moderation queue" description="Search, filter, and review reports about listings and private chats.">
+        <div className="admin-filter-bar">
+          <label className="search-field">
+            <span className="sr-only">Search reports</span><span aria-hidden="true">⌕</span>
+            <input value={reportSearch} onChange={(event) => setReportSearch(event.target.value)} placeholder="Search reports, listings, or members" />
+          </label>
+          <label className="admin-filter-select">Status
+            <select value={reportStatus} onChange={(event) => setReportStatus(event.target.value)}>
+              <option value="pending">Needs review</option><option value="reviewed">Resolved</option><option value="dismissed">Dismissed</option><option value="all">All reports</option>
+            </select>
+          </label>
+          <label className="admin-filter-select">Type
+            <select value={reportType} onChange={(event) => setReportType(event.target.value)}>
+              <option value="all">All types</option><option value="listing">Listings</option><option value="chat">Chats</option>
+            </select>
+          </label>
+        </div>
         <div className="panel-list">
-          {reports.filter((report) => report.status === 'pending').map((report) => (
+          {filteredReports.map((report) => (
             <article className="panel moderation-report" key={report.id}>
               <div className="moderation-report__content">
                 <div className="application-row__heading">
@@ -136,6 +184,12 @@ export default function AdminPanel({
                 </div>
                 <p>{report.reason}</p>
                 <small>Reported by {report.profiles?.username || 'Discord member'} · {new Date(report.created_at).toLocaleDateString()}</small>
+                {report.status !== 'pending' && (
+                  <div className="admin-report-resolution">
+                    <span className={`state-pill state-pill--${report.status}`}>{report.status}</span>
+                    {report.staff_reply && <p><strong>Staff reply:</strong> {report.staff_reply}</p>}
+                  </div>
+                )}
                 {report.report_type === 'chat' && (
                   <div className="reported-chat-excerpt">
                     <strong>Recent messages captured with this report</strong>
@@ -153,29 +207,42 @@ export default function AdminPanel({
                   <textarea rows={2} maxLength={1500} minLength={3} value={reportReplies[report.id] || ''} onChange={(event) => setReportReplies({ ...reportReplies, [report.id]: event.target.value })} placeholder="Explain what was reviewed or what action was taken…" />
                 </label>
               </div>
-              <div className="moderation-report__actions">
-                {report.job_listings && (
-                  <AdminGuard minLevel={2} profile={currentProfile}>
-                    <button className="button button--outline" onClick={() => onCloseListing(report.job_id)}>Close listing</button>
-                  </AdminGuard>
-                )}
-                {report.job_listings && (
-                  <AdminGuard minLevel={3} profile={currentProfile}>
-                    <button className="button button--danger" onClick={() => onDeleteListing(report.job_id)}>Delete</button>
-                  </AdminGuard>
-                )}
-                <button className="button button--quiet" disabled={(reportReplies[report.id] || '').trim().length < 3} onClick={() => onResolveReport(report.id, 'dismissed', reportReplies[report.id])}>Dismiss & reply</button>
-                <button className="button button--quiet" disabled={(reportReplies[report.id] || '').trim().length < 3} onClick={() => onResolveReport(report.id, 'reviewed', reportReplies[report.id])}>Resolve & reply</button>
-              </div>
+              {report.status === 'pending' && (
+                <div className="moderation-report__actions">
+                  {report.job_listings && (
+                    <AdminGuard minLevel={2} profile={currentProfile}>
+                      <button className="button button--outline" onClick={() => onCloseListing(report.job_id)}>Close listing</button>
+                    </AdminGuard>
+                  )}
+                  {report.job_listings && (
+                    <AdminGuard minLevel={3} profile={currentProfile}>
+                      <button className="button button--danger" onClick={() => onDeleteListing(report.job_id)}>Delete</button>
+                    </AdminGuard>
+                  )}
+                  <button className="button button--quiet" disabled={(reportReplies[report.id] || '').trim().length < 3} onClick={() => onResolveReport(report.id, 'dismissed', reportReplies[report.id])}>Dismiss & reply</button>
+                  <button className="button button--quiet" disabled={(reportReplies[report.id] || '').trim().length < 3} onClick={() => onResolveReport(report.id, 'reviewed', reportReplies[report.id])}>Resolve & reply</button>
+                </div>
+              )}
             </article>
           ))}
-          {!reports.some((report) => report.status === 'pending') && <div className="empty-state empty-state--compact"><p>The moderation queue is clear.</p></div>}
+          {!filteredReports.length && <div className="empty-state empty-state--compact"><p>No reports match these filters.</p></div>}
         </div>
       </PermissionSection>
 
-      <PermissionSection minLevel={2} profile={currentProfile} title="Job listing moderation" description="Level 2+ staff can close listings; Level 3+ can permanently delete rule-breaking listings.">
+      <PermissionSection id="admin-listings" minLevel={2} profile={currentProfile} title="Job listing moderation" description="Level 2+ staff can close listings; Level 3+ can permanently delete rule-breaking listings.">
+        <div className="admin-filter-bar">
+          <label className="search-field">
+            <span className="sr-only">Search listings</span><span aria-hidden="true">⌕</span>
+            <input value={listingSearch} onChange={(event) => setListingSearch(event.target.value)} placeholder="Search role or server" />
+          </label>
+          <label className="admin-filter-select">Status
+            <select value={listingStatus} onChange={(event) => setListingStatus(event.target.value)}>
+              <option value="all">All listings</option><option value="open">Open</option><option value="closed">Closed</option><option value="filled">Filled</option>
+            </select>
+          </label>
+        </div>
         <div className="panel-list">
-          {jobs.map((job) => (
+          {filteredListings.map((job) => (
             <article className="panel listing-row" key={job.id}>
               <div className="listing-row__main">
                 <span className="server-avatar server-avatar--violet" aria-hidden="true">{job.server_name.slice(0, 2).toUpperCase()}</span>
@@ -200,11 +267,15 @@ export default function AdminPanel({
               </div>
             </article>
           ))}
-          {!jobs.length && <div className="empty-state empty-state--compact"><p>No listings to moderate.</p></div>}
+          {!filteredListings.length && <div className="empty-state empty-state--compact"><p>No listings match these filters.</p></div>}
         </div>
       </PermissionSection>
 
-      <PermissionSection minLevel={3} profile={currentProfile} title="Member moderation" description="Issue warnings at Level 3+ and temporary suspensions at Level 4+. You can only act on members below your rank.">
+      <PermissionSection id="admin-members" minLevel={3} profile={currentProfile} title="Member moderation" description="Issue warnings at Level 3+ and temporary suspensions at Level 4+. You can only act on members below your rank.">
+        <label className="search-field admin-directory-search">
+          <span className="sr-only">Search members</span><span aria-hidden="true">⌕</span>
+          <input value={memberSearch} onChange={(event) => setMemberSearch(event.target.value)} placeholder="Search members by name or Discord ID" />
+        </label>
         <div className="suspension-toolbar">
           <label>Suspension duration
             <select value={suspendHours} onChange={(event) => setSuspendHours(event.target.value)}>
@@ -214,7 +285,7 @@ export default function AdminPanel({
           </label>
         </div>
         <div className="panel-list">
-          {profiles.filter((member) => member.id !== currentProfile?.id && member.admin_level < rank).map((member) => (
+          {filterMembers(profiles.filter((member) => member.id !== currentProfile?.id && member.admin_level < rank)).map((member) => (
             <article className="panel member-row" key={member.id}>
               <div className="member-row__identity">
                 {member.avatar_url ? <img className="member-avatar" src={member.avatar_url} alt="" /> : <span className="member-avatar member-avatar--fallback">{(member.username || '?').slice(0, 1).toUpperCase()}</span>}
@@ -246,12 +317,13 @@ export default function AdminPanel({
               </div>
             </article>
           ))}
+          {!filterMembers(profiles.filter((member) => member.id !== currentProfile?.id && member.admin_level < rank)).length && <div className="empty-state empty-state--compact"><p>No members match your search.</p></div>}
         </div>
       </PermissionSection>
 
       <PermissionSection minLevel={5} profile={currentProfile} title="Verified moderators & staff access" description="Senior Admins can manage staff through Level 3. Owners can manage staff through Level 5. Higher-ranked staff and your own account are protected.">
         <div className="panel-list">
-          {profiles.filter(canAssign).map((member) => {
+          {filterMembers(profiles.filter(canAssign)).map((member) => {
             const maxManagedLevel = rank === 6 ? 5 : 3;
             const canChangeRole = member.admin_level <= maxManagedLevel;
             return (
@@ -279,10 +351,11 @@ export default function AdminPanel({
               </article>
             );
           })}
+          {!filterMembers(profiles.filter(canAssign)).length && <div className="empty-state empty-state--compact"><p>No staff members match your search.</p></div>}
         </div>
       </PermissionSection>
 
-      <PermissionSection minLevel={5} profile={currentProfile} title="Staff action history" description="Private audit trail for Senior Admins and Owners. Staff and administrative actions are retained for 30 days to support reviews and promotion decisions.">
+      <PermissionSection id="admin-audit" minLevel={5} profile={currentProfile} title="Staff action history" description="Private audit trail for Senior Admins and Owners. Staff and administrative actions are retained for 30 days to support reviews and promotion decisions.">
         <div className="staff-audit-list">
           {staffActions.map((entry) => (
             <article className="panel staff-audit-entry" key={entry.id}>

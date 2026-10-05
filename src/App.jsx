@@ -6,6 +6,7 @@ import JobFeed from './components/JobFeed.jsx';
 import AdminPanel from './components/AdminPanel.jsx';
 import ChatPanel from './components/ChatPanel.jsx';
 import NotificationsPanel from './components/NotificationsPanel.jsx';
+import ProfilePanel from './components/ProfilePanel.jsx';
 import { EmployerPanel } from './components/WorkspacePanels.jsx';
 import { isSupabaseConfigured, supabaseClient } from './lib/supabaseClient.js';
 
@@ -75,11 +76,11 @@ export default function App() {
       requests.push(
         supabaseClient
           .from('applications')
-          .select('id, job_id, applicant_id, experience_summary, status, created_at, job_listings!inner(id, owner_id, server_name, role_title), profiles!applications_applicant_id_fkey(username, avatar_url, is_verified_moderator)')
+          .select('id, job_id, applicant_id, experience_summary, status, created_at, job_listings!inner(id, owner_id, server_name, role_title), profiles!applications_applicant_id_fkey(username, avatar_url, bio, portfolio_data, is_verified_moderator)')
           .order('created_at', { ascending: false }),
         supabaseClient
           .from('profiles')
-          .select('id, discord_id, username, avatar_url, bio, admin_level, is_verified_moderator, suspended_until, suspension_reason, is_suspended')
+          .select('id, discord_id, username, avatar_url, bio, portfolio_data, admin_level, is_verified_moderator, suspended_until, suspension_reason, is_suspended')
           .eq('id', session.user.id)
           .maybeSingle(),
         supabaseClient
@@ -146,7 +147,7 @@ export default function App() {
             .select('id, discord_id, username, avatar_url, admin_level, is_verified_moderator, suspended_until, suspension_reason, is_suspended')
             .order('username'),
           supabaseClient.from('moderation_reports')
-            .select('id, job_id, conversation_id, reported_user_id, report_type, chat_excerpt, reporter_id, reason, status, created_at, job_listings(id, owner_id, server_name, role_title, description, status), profiles!moderation_reports_reporter_id_fkey(username), reported_user:profiles!moderation_reports_reported_user_id_fkey(username), conversation:chat_conversations!moderation_reports_conversation_id_fkey(id, owner_id, applicant_id, job:job_listings!chat_conversations_listing_id_fkey(role_title, server_name))')
+            .select('id, job_id, conversation_id, reported_user_id, report_type, chat_excerpt, reporter_id, reason, staff_reply, status, created_at, job_listings(id, owner_id, server_name, role_title, description, status), profiles!moderation_reports_reporter_id_fkey(username), reported_user:profiles!moderation_reports_reported_user_id_fkey(username), conversation:chat_conversations!moderation_reports_conversation_id_fkey(id, owner_id, applicant_id, job:job_listings!chat_conversations_listing_id_fkey(role_title, server_name))')
             .order('created_at', { ascending: false }),
           (profileResult.data?.admin_level ?? 0) >= 6
             ? supabaseClient.from('site_settings').select('key, value')
@@ -177,7 +178,7 @@ export default function App() {
         if (level >= 1) {
           const { data, error } = await supabaseClient
             .from('moderation_reports')
-            .select('id, job_id, conversation_id, reported_user_id, report_type, chat_excerpt, reporter_id, reason, status, created_at, job_listings(id, owner_id, server_name, role_title, description, status), profiles!moderation_reports_reporter_id_fkey(username), reported_user:profiles!moderation_reports_reported_user_id_fkey(username), conversation:chat_conversations!moderation_reports_conversation_id_fkey(id, owner_id, applicant_id, job:job_listings!chat_conversations_listing_id_fkey(role_title, server_name))')
+            .select('id, job_id, conversation_id, reported_user_id, report_type, chat_excerpt, reporter_id, reason, staff_reply, status, created_at, job_listings(id, owner_id, server_name, role_title, description, status), profiles!moderation_reports_reporter_id_fkey(username), reported_user:profiles!moderation_reports_reported_user_id_fkey(username), conversation:chat_conversations!moderation_reports_conversation_id_fkey(id, owner_id, applicant_id, job:job_listings!chat_conversations_listing_id_fkey(role_title, server_name))')
             .order('created_at', { ascending: false });
           if (error) setMessage(`Unable to load moderation queue: ${error.message}`);
           else setReports(data || []);
@@ -365,6 +366,28 @@ export default function App() {
     return true;
   }
 
+  async function handleSaveProfile(values) {
+    const existingPortfolio = profile?.portfolio_data;
+    const portfolioData = existingPortfolio && typeof existingPortfolio === 'object' && !Array.isArray(existingPortfolio)
+      ? { ...existingPortfolio }
+      : {};
+    if (values.website) portfolioData.website = values.website;
+    else delete portfolioData.website;
+    const { data, error } = await supabaseClient
+      .from('profiles')
+      .update({ username: values.username, bio: values.bio, portfolio_data: portfolioData })
+      .eq('id', session.user.id)
+      .select('id, discord_id, username, avatar_url, bio, portfolio_data, admin_level, is_verified_moderator, suspended_until, suspension_reason, is_suspended')
+      .single();
+    if (error) {
+      setMessage(`Unable to save profile: ${error.message}`);
+      return false;
+    }
+    setProfile(data);
+    setNotice('Your profile has been updated.');
+    return true;
+  }
+
   async function handleUpdateJob(jobId, status) {
     const { error } = await supabaseClient.from('job_listings').update({ status }).eq('id', jobId);
     if (error) setMessage(`Unable to update listing: ${error.message}`);
@@ -456,9 +479,9 @@ export default function App() {
             <section className="hero">
               <div className="hero__content">
                 <span className="hero__badge"><span aria-hidden="true">✦</span> THE COMMUNITY STAFF NETWORK</span>
-                <h1>Good communities<br />start with <span>great people.</span></h1>
+                <h1>Discord moderator jobs<br />for <span>great communities.</span></h1>
                 <p className="hero__copy">
-                  Meet the moderators who make online spaces better — or find a team where you can make a difference.
+                  Find Discord moderator and community staff jobs, meet experienced teams, and discover your next opportunity to make online communities better.
                 </p>
                 <div className="hero__actions">
                   <a className="button button--primary button--large" href="#opportunities">
@@ -499,6 +522,18 @@ export default function App() {
 
         {activeView === 'employer' && session && (
           <EmployerPanel user={session.user} profile={profile} jobs={jobs} applications={ownedApplications} conversations={conversations} onStartChat={handleStartChat} onCreateJob={handleCreateJob} onUpdateJob={handleUpdateJob} onUpdateApplication={handleUpdateApplication} />
+        )}
+        {activeView === 'profile' && session && (
+          <ProfilePanel
+            profile={profile}
+            displayName={displayName}
+            applications={applications.filter((application) => application.applicant_id === session.user.id)}
+            listings={jobs.filter((job) => job.owner_id === session.user.id)}
+            conversations={conversations}
+            unreadCount={unreadCount}
+            onSaveProfile={handleSaveProfile}
+            onNavigate={setActiveView}
+          />
         )}
         {activeView === 'notifications' && session && (
           <NotificationsPanel
@@ -553,7 +588,6 @@ export default function App() {
               jobs={jobs}
               reports={reports}
               staffActions={staffActions}
-              applications={applications}
               settings={settings}
               onCloseListing={(jobId) => handleAdminAction('moderator_close_listing', { target_listing_id: jobId }, 'Listing closed.')}
               onDeleteListing={(jobId) => handleAdminAction('moderator_delete_listing', { target_listing_id: jobId }, 'Listing permanently deleted.')}

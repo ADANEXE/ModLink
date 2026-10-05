@@ -1,5 +1,14 @@
 import { useState } from 'react';
 
+function getSafeExternalUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 export function EmployerPanel({ user, profile, jobs, applications, conversations, onStartChat, onCreateJob, onUpdateJob, onUpdateApplication }) {
   const [showForm, setShowForm] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -85,6 +94,12 @@ export function EmployerPanel({ user, profile, jobs, applications, conversations
                 <span className="job-card__server">applied for {application.job_listings?.role_title}</span>
               </div>
               <p>{application.experience_summary}</p>
+              {application.profiles?.bio && <p className="applicant-profile-bio">{application.profiles.bio}</p>}
+              {getSafeExternalUrl(application.profiles?.portfolio_data?.website) && (
+                <a className="applicant-portfolio-link" href={getSafeExternalUrl(application.profiles.portfolio_data.website)} target="_blank" rel="noreferrer">
+                  View applicant portfolio ↗
+                </a>
+              )}
               <small>{new Date(application.created_at).toLocaleDateString()}</small>
             </div>
             <label className="sr-only" htmlFor={`app-${application.id}`}>Application status</label>
