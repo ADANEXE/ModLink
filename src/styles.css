@@ -538,6 +538,12 @@ button { color: inherit; }
 .ad-campaign-row__content h4 { margin: 8px 0 4px; color: #e8eaf2; font: 600 14px 'Space Grotesk', sans-serif; }
 .ad-campaign-row__content p { margin: 0; color: #98a3bb; font-size: 10px; line-height: 1.6; }
 .ad-campaign-row__actions { flex-shrink: 0; }
+.webhook-setting { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 13px; padding: 19px; }
+.webhook-setting > div { max-width: 700px; }
+.webhook-setting .eyebrow { margin-bottom: 6px; }
+.webhook-setting h3 { margin: 0; color: #eef0f8; font: 600 16px 'Space Grotesk', sans-serif; }
+.webhook-setting p:not(.eyebrow) { margin: 8px 0 0; color: #9da8bd; font-size: 11px; line-height: 1.7; }
+.webhook-setting__setup code { color: #c2c7ff; }
 .maintenance-page { min-height: 100vh; display: flex; align-items: center; flex-direction: column; justify-content: center; padding: 32px 20px; background: radial-gradient(ellipse at 50% 42%, rgba(88, 101, 242, .13), transparent 48%), #0b1220; }
 .maintenance-page > .brand { position: absolute; top: 34px; left: max(32px, calc((100vw - 1160px) / 2)); }
 .maintenance-card { width: min(100%, 560px); border: 1px solid rgba(148, 163, 184, .16); border-radius: 20px; padding: 52px 42px; background: linear-gradient(145deg, rgba(20, 30, 52, .96), rgba(15, 23, 42, .92)); box-shadow: 0 24px 90px rgba(0, 0, 0, .25); text-align: center; }
@@ -592,6 +598,7 @@ button { color: inherit; }
   .maintenance-card { padding: 38px 24px; }
   .maintenance-page > .brand { top: 22px; left: 20px; }
   .maintenance-setting { align-items: flex-start; flex-direction: column; }
+  .webhook-setting { align-items: flex-start; flex-direction: column; }
   .sponsored-grid { grid-template-columns: 1fr; }
   .ad-campaign-row { align-items: flex-start; flex-direction: column; }
   .chat-window__header { flex-wrap: wrap; }

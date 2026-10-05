@@ -1,5 +1,7 @@
 -- Run this script in the Supabase SQL Editor.
 
+create extension if not exists pg_net with schema extensions;
+
 create table if not exists public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
   discord_id text unique,
@@ -415,6 +417,199 @@ $$;
 revoke all on function public.admin_promotion_activity() from public;
 grant execute on function public.admin_promotion_activity() to authenticated;
 
+create or replace function public.queue_discord_admin_webhook(
+  event_name text,
+  actor_display_name text,
+  actor_level integer,
+  target_display_name text,
+  event_details jsonb,
+  require_webhook boolean default false
+)
+returns bigint
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  webhook_url text;
+  embed_title text;
+  embed_description text;
+  embed_color integer := 5793266;
+  embed_fields jsonb;
+  request_id bigint;
+  setting_enabled boolean;
+begin
+  if event_name not in (
+    'site_setting_changed',
+    'staff_rank_changed',
+    'pr_manager_role_changed',
+    'moderator_verified',
+    'moderator_verification_removed',
+    'listing_featured',
+    'listing_unfeatured',
+    'listing_closed',
+    'listing_deleted',
+    'member_warned',
+    'member_suspended',
+    'member_unsuspended',
+    'report_reviewed',
+    'report_dismissed',
+    'community_broadcast_sent',
+    'ad_campaign_saved',
+    'ad_campaign_deleted',
+    'webhook_test'
+  ) then
+    return null;
+  end if;
+
+  if event_name = 'site_setting_changed' then
+    if event_details ->> 'setting_key' not in ('maintenance_mode', 'announcement')
+      or event_details -> 'previous_value' is not distinct from event_details -> 'new_value' then
+      return null;
+    end if;
+  elsif event_name = 'ad_campaign_saved'
+    and coalesce((event_details ->> 'is_active')::boolean, false) = false
+    and coalesce((event_details ->> 'previous_is_active')::boolean, false) = false then
+    return null;
+  end if;
+
+  select decrypted_secret into webhook_url
+  from vault.decrypted_secrets
+  where name = 'modlink_discord_webhook'
+  limit 1;
+  if webhook_url is null then
+    if require_webhook then
+      raise exception 'Add the modlink_discord_webhook secret in Supabase Vault before testing notifications';
+    end if;
+    return null;
+  end if;
+  if webhook_url !~ '^https://(discord\.com|discordapp\.com)/api/webhooks/[0-9]+/[A-Za-z0-9._-]+$' then
+    raise exception 'The modlink_discord_webhook Vault secret must be a Discord webhook URL';
+  end if;
+
+  if event_name = 'site_setting_changed' and event_details ->> 'setting_key' = 'maintenance_mode' then
+    setting_enabled := (event_details ->> 'new_value')::boolean;
+    embed_title := case when setting_enabled then 'Maintenance mode enabled' else 'Maintenance mode disabled' end;
+    embed_description := case
+      when setting_enabled then 'The public ModLink site has been placed into maintenance mode.'
+      else 'The public ModLink site is back online.'
+    end;
+    embed_color := case when setting_enabled then 15844367 else 5763719 end;
+  else
+    embed_title := case event_name
+      when 'site_setting_changed' then 'Site announcement updated'
+      when 'staff_rank_changed' then 'Staff role changed'
+      when 'pr_manager_role_changed' then 'PR Manager access changed'
+      when 'moderator_verified' then 'Moderator verified'
+      when 'moderator_verification_removed' then 'Moderator verification removed'
+      when 'listing_featured' then 'Listing featured'
+      when 'listing_unfeatured' then 'Featured placement removed'
+      when 'listing_closed' then 'Listing closed'
+      when 'listing_deleted' then 'Listing removed by staff'
+      when 'member_warned' then 'Member warning issued'
+      when 'member_suspended' then 'Member suspended'
+      when 'member_unsuspended' then 'Member suspension lifted'
+      when 'report_reviewed' then 'Moderation report reviewed'
+      when 'report_dismissed' then 'Moderation report dismissed'
+      when 'community_broadcast_sent' then 'Community announcement sent'
+      when 'ad_campaign_saved' then
+        case when coalesce((event_details ->> 'is_active')::boolean, false)
+          then 'Advertising campaign published or updated'
+          else 'Advertising campaign paused'
+        end
+      when 'ad_campaign_deleted' then 'Advertising campaign deleted'
+      when 'webhook_test' then 'ModLink webhook test'
+      else 'ModLink staff activity'
+    end;
+    embed_description := case event_name
+      when 'site_setting_changed' then 'A public site announcement was updated.'
+      when 'webhook_test' then 'Discord webhook notifications are connected to ModLink.'
+      else 'A staff action was completed in the ModLink dashboard.'
+    end;
+    embed_color := case
+      when event_name in ('member_suspended', 'listing_deleted', 'ad_campaign_deleted') then 15548997
+      when event_name in ('community_broadcast_sent', 'listing_featured', 'moderator_verified', 'ad_campaign_saved') then 5793266
+      else 7506394
+    end;
+  end if;
+
+  embed_fields := jsonb_build_array(
+    jsonb_build_object(
+      'name', 'Staff member',
+      'value', coalesce(nullif(actor_display_name, ''), 'Staff member')
+        || case when actor_level is null then '' else ' · Level ' || actor_level end,
+      'inline', true
+    )
+  );
+  if nullif(target_display_name, '') is not null then
+    embed_fields := embed_fields || jsonb_build_array(
+      jsonb_build_object('name', 'Member / listing owner', 'value', left(target_display_name, 200), 'inline', true)
+    );
+  end if;
+
+  if event_name = 'staff_rank_changed' then
+    embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
+      'name', 'Rank change',
+      'value', coalesce(event_details ->> 'previous_level', '?') || ' → ' || coalesce(event_details ->> 'new_level', '?'),
+      'inline', true
+    ));
+  elsif event_name = 'member_suspended' then
+    embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
+      'name', 'Duration',
+      'value', case when (event_details ->> 'duration_hours')::integer < 0 then 'Permanent'
+        else coalesce(event_details ->> 'duration_hours', '?') || ' hours' end,
+      'inline', true
+    ));
+  elsif event_name in ('listing_featured', 'listing_unfeatured', 'listing_closed', 'listing_deleted') then
+    if nullif(event_details ->> 'role_title', '') is not null then
+      embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
+        'name', 'Listing', 'value', left(event_details ->> 'role_title', 200), 'inline', true
+      ));
+    end if;
+  elsif event_name in ('ad_campaign_saved', 'ad_campaign_deleted') then
+    if nullif(event_details ->> 'advertiser_name', '') is not null then
+      embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
+        'name', 'Advertiser', 'value', left(event_details ->> 'advertiser_name', 100), 'inline', true
+      ));
+    end if;
+    if nullif(event_details ->> 'title', '') is not null then
+      embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
+        'name', 'Campaign', 'value', left(event_details ->> 'title', 200), 'inline', true
+      ));
+    end if;
+  elsif event_name in ('report_reviewed', 'report_dismissed') then
+    embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
+      'name', 'Report type', 'value', coalesce(event_details ->> 'report_type', 'General'), 'inline', true
+    ));
+  elsif event_name = 'community_broadcast_sent' then
+    embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
+      'name', 'Announcement', 'value', left(coalesce(event_details ->> 'title', ''), 200), 'inline', true
+    ));
+    embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
+      'name', 'Recipients', 'value', coalesce(event_details ->> 'recipient_count', '0'), 'inline', true
+    ));
+  end if;
+
+  select net.http_post(
+    url := webhook_url,
+    body := jsonb_build_object(
+      'username', 'ModLink Staff Alerts',
+      'allowed_mentions', jsonb_build_object('parse', array[]::text[]),
+      'embeds', jsonb_build_array(jsonb_build_object(
+        'title', embed_title,
+        'description', embed_description,
+        'color', embed_color,
+        'fields', embed_fields,
+        'timestamp', now()
+      ))
+    ),
+    headers := '{"Content-Type":"application/json"}'::jsonb,
+    timeout_milliseconds := 5000
+  ) into request_id;
+  return request_id;
+end;
+$$;
+
 create or replace function public.record_staff_action(
   action_name text,
   target_user uuid default null,
@@ -427,30 +622,74 @@ language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  actor_display_name text;
+  event_details jsonb;
 begin
   if public.current_admin_level() < 1 and not public.current_is_pr_manager() then
     raise exception 'Staff access required to write the staff action log';
   end if;
+  actor_display_name := coalesce(
+    nullif(trim((select username from public.profiles where id = auth.uid())), ''),
+    nullif(trim(auth.jwt() -> 'user_metadata' ->> 'full_name'), ''),
+    nullif(trim(auth.jwt() -> 'user_metadata' ->> 'name'), ''),
+    'Staff member'
+  );
+  event_details := coalesce(action_details, '{}'::jsonb)
+    || jsonb_build_object('actor_level', public.current_admin_level());
   insert into public.staff_action_log (
     actor_id, actor_name, target_user_id, target_name, target_listing_id, action, details
   )
   values (
     auth.uid(),
-    coalesce(
-      nullif(trim((select username from public.profiles where id = auth.uid())), ''),
-      nullif(trim(auth.jwt() -> 'user_metadata' ->> 'full_name'), ''),
-      nullif(trim(auth.jwt() -> 'user_metadata' ->> 'name'), ''),
-      'Staff member'
-    ),
+    actor_display_name,
     target_user,
     nullif(trim(target_member_name), ''),
     target_listing,
     action_name,
-    coalesce(action_details, '{}'::jsonb)
-      || jsonb_build_object('actor_level', public.current_admin_level())
+    event_details
+  );
+  perform public.queue_discord_admin_webhook(
+    action_name,
+    actor_display_name,
+    public.current_admin_level(),
+    target_member_name,
+    event_details
   );
 end;
 $$;
+
+create or replace function public.owner_test_discord_webhook()
+returns bigint
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  actor_display_name text;
+begin
+  if public.current_admin_level() < 6 then
+    raise exception 'Owner access required';
+  end if;
+  actor_display_name := coalesce(
+    nullif(trim((select username from public.profiles where id = auth.uid())), ''),
+    nullif(trim(auth.jwt() -> 'user_metadata' ->> 'full_name'), ''),
+    'Owner'
+  );
+  return public.queue_discord_admin_webhook(
+    'webhook_test',
+    actor_display_name,
+    public.current_admin_level(),
+    null,
+    '{}'::jsonb,
+    true
+  );
+end;
+$$;
+
+revoke all on function public.queue_discord_admin_webhook(text, text, integer, text, jsonb, boolean) from public, anon, authenticated;
+revoke all on function public.owner_test_discord_webhook() from public, anon;
+grant execute on function public.owner_test_discord_webhook() to authenticated;
 
 revoke all on function public.record_staff_action(text, uuid, text, uuid, jsonb) from public, anon, authenticated;
 
@@ -1367,6 +1606,7 @@ declare
   campaign_placements text[];
   saved_id uuid;
   campaign_active boolean;
+  previous_campaign_active boolean;
 begin
   if public.current_admin_level() < 6 then
     raise exception 'Owner access required';
@@ -1427,6 +1667,12 @@ begin
     )
     returning id into saved_id;
   else
+    select is_active into previous_campaign_active
+    from public.ad_campaigns
+    where id = campaign_id;
+    if not found then
+      raise exception 'Ad campaign not found';
+    end if;
     update public.ad_campaigns
     set advertiser_name = trim(campaign_value ->> 'advertiser_name'),
         title = trim(campaign_value ->> 'title'),
@@ -1453,7 +1699,9 @@ begin
     jsonb_build_object(
       'campaign_id', saved_id,
       'advertiser_name', trim(campaign_value ->> 'advertiser_name'),
+      'title', trim(campaign_value ->> 'title'),
       'is_active', campaign_active,
+      'previous_is_active', previous_campaign_active,
       'placements', campaign_placements
     )
   );
@@ -1469,13 +1717,14 @@ set search_path = ''
 as $$
 declare
   deleted_title text;
+  deleted_advertiser text;
 begin
   if public.current_admin_level() < 6 then
     raise exception 'Owner access required';
   end if;
   delete from public.ad_campaigns
   where id = campaign_id
-  returning title into deleted_title;
+  returning title, advertiser_name into deleted_title, deleted_advertiser;
   if deleted_title is null then
     raise exception 'Ad campaign not found';
   end if;
@@ -1484,7 +1733,7 @@ begin
     null,
     null,
     null,
-    jsonb_build_object('campaign_id', campaign_id, 'title', deleted_title)
+    jsonb_build_object('campaign_id', campaign_id, 'advertiser_name', deleted_advertiser, 'title', deleted_title)
   );
 end;
 $$;
@@ -1857,7 +2106,8 @@ with required_tables(table_name) as (
     ('notifications'),
     ('chat_conversations'),
     ('chat_messages'),
-    ('staff_action_log')
+    ('staff_action_log'),
+    ('ad_campaigns')
 )
 select
   table_name,
@@ -1879,6 +2129,7 @@ where table_schema = 'public'
     'notifications',
     'chat_conversations',
     'chat_messages',
-    'staff_action_log'
+    'staff_action_log',
+    'ad_campaigns'
   )
 order by table_name, ordinal_position;

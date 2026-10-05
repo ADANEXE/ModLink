@@ -545,6 +545,16 @@ export default function App() {
     );
   }
 
+  async function handleTestDiscordWebhook() {
+    const { data, error } = await supabaseClient.rpc('owner_test_discord_webhook');
+    if (error) {
+      setMessage(`Unable to queue Discord webhook test: ${error.message}`);
+      return null;
+    }
+    setNotice(`Discord test alert queued (request ${data}). Check the target channel; delivery is asynchronous.`);
+    return data;
+  }
+
   async function handleDeleteAdCampaign(campaignId) {
     return handleAdminAction(
       'owner_delete_ad_campaign',
@@ -850,6 +860,7 @@ export default function App() {
               onSaveSetting={handleSaveSetting}
               onSaveAdCampaign={handleSaveAdCampaign}
               onDeleteAdCampaign={handleDeleteAdCampaign}
+              onTestDiscordWebhook={handleTestDiscordWebhook}
               onBroadcast={handleBroadcast}
             />
           </AdminGuard>

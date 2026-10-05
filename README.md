@@ -12,9 +12,26 @@ A React/Vite Discord staff and moderator hiring hub using Supabase Auth and Post
    VITE_SUPABASE_ANON_KEY=your-anon-key
    ```
 
-3. In the Supabase SQL Editor, run the complete `supabase-setup.sql` script. It is safe to rerun and includes profile backfill for existing accounts. The final query lists each required app table and confirms whether it exists in `public`: `profiles`, `job_listings`, `applications`, `moderation_reports`, `moderation_warnings`, `site_settings`, `notifications`, `pr_inquiries`, `chat_conversations`, `chat_messages`, and `staff_action_log`. Supabase-managed `auth.users` and the `pg_cron` extension are not app tables created by this script.
+3. In the Supabase SQL Editor, run the complete `supabase-setup.sql` script. It is safe to rerun and includes profile backfill for existing accounts. The final query lists each required app table and confirms whether it exists in `public`: `profiles`, `job_listings`, `applications`, `moderation_reports`, `moderation_warnings`, `site_settings`, `notifications`, `pr_inquiries`, `chat_conversations`, `chat_messages`, `staff_action_log`, and `ad_campaigns`. It enables the `pg_cron` and `pg_net` extensions. Supabase-managed `auth.users` is not an app table created by this script.
 4. In Supabase **Authentication → Providers**, enable Discord and add the Discord OAuth client credentials. Add `http://localhost:5173` (or your deployed site URL) to the Supabase **Authentication → URL Configuration → Redirect URLs**.
 5. Run `npm run dev`.
+
+### Discord staff alerts (optional)
+
+The Owner dashboard can queue Discord channel alerts when maintenance mode is switched on or off and for important staff events: rank/PR-role or verification changes, warnings and suspensions, listing feature/close/delete actions, moderation report outcomes, community broadcasts, and ad campaign publish/pause/delete actions. Public announcements also send an alert when their text changes. Messages include the acting staff member and relevant safe context; private report replies, warning reasons, webhook URLs, and announcement bodies are not sent. Requests are queued by Supabase `pg_net`, so delivery is asynchronous and never exposes the webhook URL in frontend code.
+
+1. In the Supabase Dashboard, open **Integrations → Vault** and add the Discord channel webhook URL as a secret named exactly `modlink_discord_webhook`. Keep the URL private. Do not paste it into the browser, website settings, GitHub, or a public SQL file.
+2. Open the Owner staff dashboard → **Site controls & advertising** and choose **Send test alert**. Check that the test appears in the intended Discord channel before relying on alerts.
+3. To inspect recent asynchronous HTTP delivery results in the Supabase SQL Editor, run:
+
+   ```sql
+   select id, status_code, timed_out, error_msg, created
+   from net._http_response
+   order by created desc
+   limit 20;
+   ```
+
+Without the Vault secret, regular site/admin actions continue working but Discord alerts are skipped; the Owner’s test action reports that the secret is missing. Discord webhook delivery is best-effort and depends on Discord and Supabase network availability.
 
 The site supports browsing open listings, Discord sign-in, applying to roles, a personal dashboard with an editable introduction and portfolio link, tracking applications, publishing and managing listings, a searchable tiered moderation workspace, account notifications, private lister/applicant chats, and Owner-controlled maintenance mode. Applicants can share their profile bio and portfolio link with listing owners alongside applications.
 

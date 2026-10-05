@@ -65,6 +65,7 @@ export default function AdminPanel({
   onSaveSetting,
   onSaveAdCampaign,
   onDeleteAdCampaign,
+  onTestDiscordWebhook,
   onBroadcast,
 }) {
   const [announcement, setAnnouncement] = useState(settings.announcement || '');
@@ -75,6 +76,7 @@ export default function AdminPanel({
   const [selectedListing, setSelectedListing] = useState(null);
   const [suspendHours, setSuspendHours] = useState('24');
   const [saving, setSaving] = useState(false);
+  const [webhookTesting, setWebhookTesting] = useState(false);
   const [reportStatus, setReportStatus] = useState('pending');
   const [reportType, setReportType] = useState('all');
   const [reportSearch, setReportSearch] = useState('');
@@ -201,6 +203,12 @@ export default function AdminPanel({
     setMaintenanceSaving(true);
     await onSaveSetting('maintenance_mode', settings.maintenance_mode !== true);
     setMaintenanceSaving(false);
+  }
+
+  async function testDiscordWebhook() {
+    setWebhookTesting(true);
+    await onTestDiscordWebhook();
+    setWebhookTesting(false);
   }
 
   async function sendBroadcast(event) {
@@ -606,6 +614,17 @@ export default function AdminPanel({
           </label>
           <button className="button button--primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button>
         </form>
+        <section className="panel webhook-setting" aria-labelledby="webhook-setting-title">
+          <div>
+            <p className="eyebrow">PRIVATE SERVER NOTIFICATIONS</p>
+            <h3 id="webhook-setting-title">Discord admin alerts</h3>
+            <p>Maintenance changes and important moderation, staff, listing, announcement, and ad campaign actions can be sent to your Discord channel. The webhook URL is read only from Supabase Vault; it is never stored in this site or exposed to members.</p>
+            <p className="webhook-setting__setup">In Supabase → Integrations → Vault, add a secret named <code>modlink_discord_webhook</code> containing the Discord channel webhook URL. Then send a test alert before relying on notifications.</p>
+          </div>
+          <button className="button button--outline" type="button" onClick={testDiscordWebhook} disabled={webhookTesting}>
+            {webhookTesting ? 'Queueing test…' : 'Send test alert'}
+          </button>
+        </section>
         <section className="ad-campaign-manager" aria-labelledby="ad-campaign-heading">
           <div className="profile-section-heading">
             <div><p className="eyebrow">SPONSORED PLACEMENTS</p><h3 id="ad-campaign-heading">Ad campaigns</h3></div>
