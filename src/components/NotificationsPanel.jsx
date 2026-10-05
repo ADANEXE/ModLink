@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 const NOTIFICATION_ICONS = {
   announcement: '✦',
   report_update: '⚑',
@@ -13,7 +15,23 @@ const NOTIFICATION_ICONS = {
   listing_featured: '✦',
 };
 
-export default function NotificationsPanel({ notifications, onOpen, onMarkRead, onMarkAllRead }) {
+export default function NotificationsPanel({ notifications, onOpen, onMarkRead, onMarkAllRead, onReportStaffAction }) {
+  const [reportingId, setReportingId] = useState(null);
+  const [reportReason, setReportReason] = useState('');
+  const [sendingReport, setSendingReport] = useState(false);
+
+  async function submitStaffReport(event, notification) {
+    event.preventDefault();
+    if (reportReason.trim().length < 10) return;
+    setSendingReport(true);
+    const sent = await onReportStaffAction(notification, reportReason.trim());
+    setSendingReport(false);
+    if (sent) {
+      setReportingId(null);
+      setReportReason('');
+    }
+  }
+
   return (
     <section className="workspace-section">
       <div className="section-heading">
@@ -36,6 +54,7 @@ export default function NotificationsPanel({ notifications, onOpen, onMarkRead, 
               <span className="notification-card__content">
                 <strong>{notification.title}</strong>
                 <span>{notification.body}</span>
+                {notification.actor_id && <small className="notification-card__actor">Action by {notification.actor?.username || 'Staff member'}{notification.actor?.admin_level > 0 ? ` · Level ${notification.actor.admin_level}` : ''}</small>}
                 <small>{new Date(notification.created_at).toLocaleString()}</small>
               </span>
               {!notification.read_at && <span className="notification-dot" aria-label="Unread" />}
@@ -44,6 +63,34 @@ export default function NotificationsPanel({ notifications, onOpen, onMarkRead, 
               <button className="notification-card__read" onClick={() => onMarkRead(notification.id)}>
                 Mark read
               </button>
+            )}
+            {notification.actor?.admin_level > 0 && notification.actor_id !== notification.user_id && (
+              notification.actor.admin_level >= 6 ? (
+                <a className="notification-card__report" href="https://dsc.gg/modlinkdc" target="_blank" rel="noreferrer">Report an Owner decision</a>
+              ) : (
+                <button
+                  className="notification-card__report"
+                  type="button"
+                  onClick={() => {
+                    setReportingId((current) => current === notification.id ? null : notification.id);
+                    setReportReason('');
+                  }}
+                >
+                  {reportingId === notification.id ? 'Cancel report' : 'Report staff action'}
+                </button>
+              )
+            )}
+            {reportingId === notification.id && (
+              <form className="notification-staff-report" onSubmit={(event) => submitStaffReport(event, notification)}>
+                <label className="form-field">
+                  <span>What feels unfair about this action?</span>
+                  <textarea required minLength={10} maxLength={1000} rows={3} value={reportReason} onChange={(event) => setReportReason(event.target.value)} placeholder="Explain what should be reviewed. The staff member and original notification are attached." />
+                </label>
+                <small>Only a higher-ranked staff reviewer can review this report; the reported staff member cannot view it.</small>
+                <button className="button button--danger" type="submit" disabled={sendingReport || reportReason.trim().length < 10}>
+                  {sendingReport ? 'Sending report…' : 'Submit confidential report'}
+                </button>
+              </form>
             )}
           </article>
         ))}

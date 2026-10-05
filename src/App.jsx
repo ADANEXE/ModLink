@@ -8,6 +8,7 @@ import ChatPanel from './components/ChatPanel.jsx';
 import NotificationsPanel from './components/NotificationsPanel.jsx';
 import ProfilePanel from './components/ProfilePanel.jsx';
 import { EmployerPanel } from './components/WorkspacePanels.jsx';
+import { getPromotionReviewCandidates } from './lib/staffPromotion.js';
 import { isSupabaseConfigured, supabaseClient } from './lib/supabaseClient.js';
 
 export default function App() {
@@ -18,9 +19,11 @@ export default function App() {
   const [profiles, setProfiles] = useState([]);
   const [reports, setReports] = useState([]);
   const [staffActions, setStaffActions] = useState([]);
+  const [promotionActivity, setPromotionActivity] = useState([]);
   const [warnings, setWarnings] = useState([]);
   const [settings, setSettings] = useState({});
   const [announcement, setAnnouncement] = useState('');
+  const [publicAd, setPublicAd] = useState(null);
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [conversations, setConversations] = useState([]);
@@ -85,7 +88,7 @@ export default function App() {
           .maybeSingle(),
         supabaseClient
           .from('notifications')
-          .select('*')
+          .select('*, actor:profiles!notifications_actor_id_fkey(username, admin_level)')
           .order('created_at', { ascending: false })
           .limit(100),
         supabaseClient
@@ -106,12 +109,14 @@ export default function App() {
     const { data: publicSettings, error: announcementError } = await supabaseClient
       .from('site_settings')
       .select('key, value')
-      .in('key', ['announcement', 'maintenance_mode']);
+      .in('key', ['announcement', 'maintenance_mode', 'ad_slot']);
     if (announcementError) setMessage(`Unable to load site announcement: ${announcementError.message}`);
     else {
       const publicSettingsByKey = Object.fromEntries((publicSettings || []).map((item) => [item.key, item.value]));
       setAnnouncement(typeof publicSettingsByKey.announcement === 'string' ? publicSettingsByKey.announcement : '');
       setMaintenanceMode(publicSettingsByKey.maintenance_mode === true);
+      const adSetting = publicSettingsByKey.ad_slot;
+      setPublicAd(adSetting && typeof adSetting === 'object' && adSetting.enabled === true ? adSetting : null);
     }
 
     if (session?.user) {
@@ -142,12 +147,12 @@ export default function App() {
       else setWarnings(warningData || []);
 
       if (!profileResult.error && (profileResult.data?.admin_level ?? 0) >= 5) {
-        const [profilesResult, reportsResult, settingsResult, staffActionsResult] = await Promise.all([
+        const [profilesResult, reportsResult, settingsResult, staffActionsResult, promotionActivityResult] = await Promise.all([
           supabaseClient.from('profiles')
             .select('id, discord_id, username, avatar_url, admin_level, is_verified_moderator, suspended_until, suspension_reason, is_suspended')
             .order('username'),
           supabaseClient.from('moderation_reports')
-            .select('id, job_id, conversation_id, reported_user_id, report_type, chat_excerpt, reporter_id, reason, staff_reply, status, created_at, job_listings(id, owner_id, server_name, role_title, description, status), profiles!moderation_reports_reporter_id_fkey(username), reported_user:profiles!moderation_reports_reported_user_id_fkey(username), conversation:chat_conversations!moderation_reports_conversation_id_fkey(id, owner_id, applicant_id, job:job_listings!chat_conversations_listing_id_fkey(role_title, server_name))')
+            .select('id, job_id, conversation_id, reported_user_id, report_type, chat_excerpt, reporter_id, reason, staff_reply, status, created_at, job_listings(id, owner_id, server_name, role_title, description, status), profiles!moderation_reports_reporter_id_fkey(username), reported_user:profiles!moderation_reports_reported_user_id_fkey(username), resolved_staff:profiles!moderation_reports_resolved_by_fkey(username), conversation:chat_conversations!moderation_reports_conversation_id_fkey(id, owner_id, applicant_id, job:job_listings!chat_conversations_listing_id_fkey(role_title, server_name))')
             .order('created_at', { ascending: false }),
           (profileResult.data?.admin_level ?? 0) >= 6
             ? supabaseClient.from('site_settings').select('key, value')
@@ -157,6 +162,7 @@ export default function App() {
             .gte('created_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString())
             .order('created_at', { ascending: false })
             .limit(200),
+          supabaseClient.rpc('admin_promotion_activity'),
         ]);
         if (profilesResult.error) setMessage(`Unable to load member directory: ${profilesResult.error.message}`);
         else setProfiles(profilesResult.data || []);
@@ -166,6 +172,10 @@ export default function App() {
         else setSettings(Object.fromEntries((settingsResult.data || []).map((item) => [item.key, item.value])));
         if (staffActionsResult.error) setMessage(`Unable to load staff action history: ${staffActionsResult.error.message}`);
         else setStaffActions(staffActionsResult.data || []);
+        if (promotionActivityResult.error) {
+          setMessage(`Unable to load promotion readiness data: ${promotionActivityResult.error.message}`);
+          setPromotionActivity([]);
+        } else setPromotionActivity(promotionActivityResult.data || []);
       } else {
         const level = profileResult.data?.admin_level ?? 0;
         if (level >= 3) {
@@ -178,7 +188,7 @@ export default function App() {
         if (level >= 1) {
           const { data, error } = await supabaseClient
             .from('moderation_reports')
-            .select('id, job_id, conversation_id, reported_user_id, report_type, chat_excerpt, reporter_id, reason, staff_reply, status, created_at, job_listings(id, owner_id, server_name, role_title, description, status), profiles!moderation_reports_reporter_id_fkey(username), reported_user:profiles!moderation_reports_reported_user_id_fkey(username), conversation:chat_conversations!moderation_reports_conversation_id_fkey(id, owner_id, applicant_id, job:job_listings!chat_conversations_listing_id_fkey(role_title, server_name))')
+            .select('id, job_id, conversation_id, reported_user_id, report_type, chat_excerpt, reporter_id, reason, staff_reply, status, created_at, job_listings(id, owner_id, server_name, role_title, description, status), profiles!moderation_reports_reporter_id_fkey(username), reported_user:profiles!moderation_reports_reported_user_id_fkey(username), resolved_staff:profiles!moderation_reports_resolved_by_fkey(username), conversation:chat_conversations!moderation_reports_conversation_id_fkey(id, owner_id, applicant_id, job:job_listings!chat_conversations_listing_id_fkey(role_title, server_name))')
             .order('created_at', { ascending: false });
           if (error) setMessage(`Unable to load moderation queue: ${error.message}`);
           else setReports(data || []);
@@ -188,6 +198,7 @@ export default function App() {
         }
         setSettings({});
         setStaffActions([]);
+        setPromotionActivity([]);
       }
     } else {
       setApplications([]);
@@ -195,6 +206,7 @@ export default function App() {
       setProfiles([]);
       setReports([]);
       setStaffActions([]);
+      setPromotionActivity([]);
       setWarnings([]);
       setSettings({});
       setNotifications([]);
@@ -214,7 +226,7 @@ export default function App() {
     const refreshNotifications = async () => {
       const { data, error } = await supabaseClient
         .from('notifications')
-        .select('*')
+        .select('*, actor:profiles!notifications_actor_id_fkey(username, admin_level)')
         .order('created_at', { ascending: false })
         .limit(100);
       if (!active) return;
@@ -284,6 +296,31 @@ export default function App() {
       return false;
     }
     setNotice('Thanks. Your report was sent to the moderation team.');
+    return true;
+  }
+
+  async function handleReportStaffAction(notification, details) {
+    const staffId = notification.actor_id;
+    if (!session?.user || !staffId || staffId === session.user.id) {
+      setMessage('This staff action cannot be reported from this account.');
+      return false;
+    }
+    const reason = [
+      details.trim().slice(0, 450),
+      '',
+      `Reported notification: ${notification.title}\nAction details: ${notification.body}`.slice(0, 500),
+    ].join('\n').trim().slice(0, 1000);
+    const { error } = await supabaseClient.from('moderation_reports').insert({
+      report_type: 'staff_conduct',
+      reported_user_id: staffId,
+      reporter_id: session.user.id,
+      reason,
+    });
+    if (error) {
+      setMessage(`Unable to submit staff conduct report: ${error.message}`);
+      return false;
+    }
+    setNotice('Your report was sent for review by a higher-ranked administrator.');
     return true;
   }
 
@@ -408,10 +445,14 @@ export default function App() {
 
   async function handleAdminAction(rpcName, args, successMessage) {
     const { error } = await supabaseClient.rpc(rpcName, args);
-    if (error) setMessage(`Unable to complete admin action: ${error.message}`);
+    if (error) {
+      setMessage(`Unable to complete admin action: ${error.message}`);
+      return false;
+    }
     else {
       setNotice(successMessage);
       await loadData();
+      return true;
     }
   }
 
@@ -430,11 +471,14 @@ export default function App() {
   }
 
   async function handleSaveSetting(key, value) {
-    await handleAdminAction('owner_set_site_setting', { setting_key: key, setting_value: value }, 'Site setting saved.');
+    return handleAdminAction('owner_set_site_setting', { setting_key: key, setting_value: value }, 'Site setting saved.');
   }
 
   const adminLevel = profile?.admin_level ?? 0;
   const unreadCount = notifications.filter((notification) => !notification.read_at).length;
+  const adminReviewCount = adminLevel >= 5
+    ? getPromotionReviewCandidates(profiles, promotionActivity, adminLevel).length
+    : 0;
   const ownedApplications = applications.filter((application) =>
     application.job_listings?.owner_id === session?.user?.id,
   );
@@ -468,6 +512,7 @@ export default function App() {
         activeView={activeView}
         onNavigate={setActiveView}
         adminLevel={adminLevel}
+        adminReviewCount={adminReviewCount}
         unreadCount={unreadCount}
         onSignIn={handleSignIn}
         onSignOut={handleSignOut}
@@ -511,6 +556,14 @@ export default function App() {
               <div><strong>Build</strong><span>healthier communities</span></div>
             </div>
             {announcement && <p className="site-announcement"><span aria-hidden="true">✦</span>{announcement}</p>}
+            {publicAd?.enabled && publicAd.title && /^https:\/\//i.test(publicAd.url || '') && (
+              <a className="sponsored-placement" href={publicAd.url} target="_blank" rel="sponsored noopener noreferrer">
+                <span className="sponsored-placement__label">SPONSORED · {publicAd.sponsor || 'COMMUNITY PARTNER'}</span>
+                <span className="sponsored-placement__title">{publicAd.title}</span>
+                {publicAd.description && <span className="sponsored-placement__copy">{publicAd.description}</span>}
+                <span className="sponsored-placement__cta">Learn more ↗</span>
+              </a>
+            )}
             {isSupabaseConfigured && <JobFeed jobs={jobs} focusListingId={focusListingId} onClearFocus={() => setFocusListingId(null)} loading={loading} user={session?.user} profile={profile} onApply={handleApply} onReport={handleReport} onSignIn={handleSignIn} />}
             {!isSupabaseConfigured && (
               <p className="config-notice" role="status">
@@ -541,6 +594,7 @@ export default function App() {
             onOpen={handleOpenNotification}
             onMarkRead={handleMarkNotificationRead}
             onMarkAllRead={handleMarkAllNotificationsRead}
+            onReportStaffAction={handleReportStaffAction}
           />
         )}
         {activeView === 'messages' && session && (
@@ -588,6 +642,8 @@ export default function App() {
               jobs={jobs}
               reports={reports}
               staffActions={staffActions}
+              promotionActivity={promotionActivity}
+              applications={applications}
               settings={settings}
               onCloseListing={(jobId) => handleAdminAction('moderator_close_listing', { target_listing_id: jobId }, 'Listing closed.')}
               onDeleteListing={(jobId) => handleAdminAction('moderator_delete_listing', { target_listing_id: jobId }, 'Listing permanently deleted.')}

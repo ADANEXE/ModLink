@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import AdminGuard from './AdminGuard.jsx';
+import { getPromotionReviewCandidates, isPromotionCaseworkAction } from '../lib/staffPromotion.js';
 
 const ROLES = ['User', 'Trial Mod', 'Jr Mod', 'Mod', 'Sr Mod', 'Sr Admin', 'Owner'];
 const ACTION_LABELS = {
@@ -43,6 +44,8 @@ export default function AdminPanel({
   jobs,
   reports,
   staffActions,
+  promotionActivity,
+  applications,
   settings,
   onCloseListing,
   onDeleteListing,
@@ -69,11 +72,51 @@ export default function AdminPanel({
   const [listingStatus, setListingStatus] = useState('all');
   const [listingSearch, setListingSearch] = useState('');
   const [memberSearch, setMemberSearch] = useState('');
+  const [auditSearch, setAuditSearch] = useState('');
+  const [auditType, setAuditType] = useState('all');
+  const [adSlot, setAdSlot] = useState({
+    enabled: false,
+    sponsor: '',
+    title: '',
+    description: '',
+    url: '',
+    ...(settings.ad_slot || {}),
+  });
   const rank = currentProfile?.admin_level ?? 0;
   const canAssign = (member) => member.id !== currentProfile?.id
     && (rank === 6 ? member.admin_level <= 5 : member.admin_level <= 3);
   const pendingReports = reports.filter((report) => report.status === 'pending').length;
   const openListings = jobs.filter((job) => job.status === 'open').length;
+  const activeApplications = applications.filter((application) => ['pending', 'reviewing'].includes(application.status)).length;
+  const promotionCandidates = getPromotionReviewCandidates(profiles, promotionActivity, rank);
+  const reviewableActions = staffActions.filter((action) => isPromotionCaseworkAction(action.action));
+  const filteredAudit = staffActions.filter((entry) => {
+    if (auditType !== 'all' && entry.action !== auditType) return false;
+    const query = auditSearch.trim().toLowerCase();
+    return !query || [
+      entry.actor_name,
+      entry.target_name,
+      entry.action.replaceAll('_', ' '),
+      JSON.stringify(entry.details || {}),
+    ].some((value) => value?.toLowerCase().includes(query));
+  });
+  const activityByDay = Array.from({ length: 7 }, (_, index) => {
+    const day = new Date();
+    day.setHours(0, 0, 0, 0);
+    day.setDate(day.getDate() - (6 - index));
+    const nextDay = new Date(day);
+    nextDay.setDate(day.getDate() + 1);
+    return {
+      day,
+      count: staffActions.filter((action) => {
+        const createdAt = new Date(action.created_at);
+        return createdAt >= day && createdAt < nextDay;
+      }).length,
+    };
+  });
+  const peakActivity = Math.max(1, ...activityByDay.map((item) => item.count));
+  const newListings30d = jobs.filter((job) => new Date(job.created_at) >= new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)).length;
+  const newApplications30d = applications.filter((application) => new Date(application.created_at) >= new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)).length;
   const filteredReports = reports.filter((report) => {
     if (reportStatus !== 'all' && report.status !== reportStatus) return false;
     if (reportType !== 'all' && report.report_type !== reportType) return false;
@@ -101,6 +144,24 @@ export default function AdminPanel({
   useEffect(() => {
     setAnnouncement(settings.announcement || '');
   }, [settings.announcement]);
+
+  useEffect(() => {
+    setAdSlot({
+      enabled: false,
+      sponsor: '',
+      title: '',
+      description: '',
+      url: '',
+      ...(settings.ad_slot || {}),
+    });
+  }, [settings.ad_slot]);
+
+  async function saveAdSlot(event) {
+    event.preventDefault();
+    setSaving(true);
+    await onSaveSetting('ad_slot', adSlot);
+    setSaving(false);
+  }
 
   async function saveAnnouncement(event) {
     event.preventDefault();
@@ -140,7 +201,7 @@ export default function AdminPanel({
         <a className="panel admin-stat" href="#admin-reports"><span>Needs review</span><strong>{pendingReports}</strong><small>Open moderation queue →</small></a>
         <div className="panel admin-stat"><span>Your access</span><strong>{rank}</strong><small>{ROLES[rank]}</small></div>
         {rank >= 2 && <a className="panel admin-stat" href="#admin-listings"><span>Open listings</span><strong>{openListings}</strong><small>Review job posts →</small></a>}
-        {rank >= 3 && <a className="panel admin-stat" href="#admin-members"><span>Staff & members</span><strong>{profiles.length}</strong><small>Open member tools →</small></a>}
+        {rank >= 3 && <a className="panel admin-stat" href="#admin-members"><span>Active applications</span><strong>{activeApplications}</strong><small>Review staff & members →</small></a>}
         {rank >= 5 && <a className="panel admin-stat" href="#admin-audit"><span>Staff actions · 30 days</span><strong>{staffActions.length}</strong><small>Review audit trail →</small></a>}
       </div>
 
@@ -157,13 +218,15 @@ export default function AdminPanel({
           </label>
           <label className="admin-filter-select">Type
             <select value={reportType} onChange={(event) => setReportType(event.target.value)}>
-              <option value="all">All types</option><option value="listing">Listings</option><option value="chat">Chats</option>
+              <option value="all">All types</option><option value="listing">Listings</option><option value="chat">Chats</option><option value="staff_conduct">Staff conduct</option>
             </select>
           </label>
         </div>
         <div className="panel-list">
-          {filteredReports.map((report) => (
-            <article className="panel moderation-report" key={report.id}>
+          {filteredReports.map((report) => {
+            const ownStaffReport = report.report_type === 'staff_conduct' && report.reporter_id === currentProfile?.id;
+            return (
+              <article className="panel moderation-report" key={report.id}>
               <div className="moderation-report__content">
                 <div className="application-row__heading">
                   {report.report_type === 'chat' ? (
@@ -175,18 +238,23 @@ export default function AdminPanel({
                         {' · reported account: '}{report.reported_user?.username || 'Discord member'}
                       </span>
                     </div>
+                  ) : report.report_type === 'staff_conduct' ? (
+                    <div>
+                      <h4>Staff conduct report</h4>
+                      <span className="job-card__server">Reported staff member: {report.reported_user?.username || 'Staff account'}</span>
+                    </div>
                   ) : report.job_listings ? (
                     <button className="report-listing-link" onClick={() => setSelectedListing(report.job_listings)}>
                       {report.job_listings.role_title} <span>↗ View listing</span>
                     </button>
                   ) : <h4>Removed listing</h4>}
-                  {report.report_type !== 'chat' && <span className="job-card__server">{report.job_listings?.server_name || 'Listing unavailable'}</span>}
+                  {report.report_type === 'listing' && <span className="job-card__server">{report.job_listings?.server_name || 'Listing unavailable'}</span>}
                 </div>
                 <p>{report.reason}</p>
                 <small>Reported by {report.profiles?.username || 'Discord member'} · {new Date(report.created_at).toLocaleDateString()}</small>
                 {report.status !== 'pending' && (
                   <div className="admin-report-resolution">
-                    <span className={`state-pill state-pill--${report.status}`}>{report.status}</span>
+                    <span className={`state-pill state-pill--${report.status}`}>{report.status}{report.resolved_staff?.username ? ` · reviewed by ${report.resolved_staff.username}` : ''}</span>
                     {report.staff_reply && <p><strong>Staff reply:</strong> {report.staff_reply}</p>}
                   </div>
                 )}
@@ -202,19 +270,23 @@ export default function AdminPanel({
                     )) : <p>No unexpired messages were available when the report was submitted.</p>}
                   </div>
                 )}
-                <label className="report-reply">
-                  <span>Your response (sent privately to the reporter)</span>
-                  <textarea rows={2} maxLength={1500} minLength={3} value={reportReplies[report.id] || ''} onChange={(event) => setReportReplies({ ...reportReplies, [report.id]: event.target.value })} placeholder="Explain what was reviewed or what action was taken…" />
-                </label>
+                {report.status === 'pending' && ownStaffReport
+                  ? <p className="admin-subsection__description">You submitted this report. Another eligible Senior Admin must review it.</p>
+                  : report.status === 'pending' && (
+                    <label className="report-reply">
+                      <span>Your response (sent privately to the reporter)</span>
+                      <textarea rows={2} maxLength={1500} minLength={3} value={reportReplies[report.id] || ''} onChange={(event) => setReportReplies({ ...reportReplies, [report.id]: event.target.value })} placeholder="Explain what was reviewed or what action was taken…" />
+                    </label>
+                  )}
               </div>
-              {report.status === 'pending' && (
+              {report.status === 'pending' && !ownStaffReport && (
                 <div className="moderation-report__actions">
-                  {report.job_listings && (
+                  {report.report_type !== 'staff_conduct' && report.job_listings && (
                     <AdminGuard minLevel={2} profile={currentProfile}>
                       <button className="button button--outline" onClick={() => onCloseListing(report.job_id)}>Close listing</button>
                     </AdminGuard>
                   )}
-                  {report.job_listings && (
+                  {report.report_type !== 'staff_conduct' && report.job_listings && (
                     <AdminGuard minLevel={3} profile={currentProfile}>
                       <button className="button button--danger" onClick={() => onDeleteListing(report.job_id)}>Delete</button>
                     </AdminGuard>
@@ -223,8 +295,9 @@ export default function AdminPanel({
                   <button className="button button--quiet" disabled={(reportReplies[report.id] || '').trim().length < 3} onClick={() => onResolveReport(report.id, 'reviewed', reportReplies[report.id])}>Resolve & reply</button>
                 </div>
               )}
-            </article>
-          ))}
+              </article>
+            );
+          })}
           {!filteredReports.length && <div className="empty-state empty-state--compact"><p>No reports match these filters.</p></div>}
         </div>
       </PermissionSection>
@@ -321,7 +394,36 @@ export default function AdminPanel({
         </div>
       </PermissionSection>
 
-      <PermissionSection minLevel={5} profile={currentProfile} title="Verified moderators & staff access" description="Senior Admins can manage staff through Level 3. Owners can manage staff through Level 5. Higher-ranked staff and your own account are protected.">
+      {rank >= 5 && (
+        <section className="admin-subsection promotion-review-section" aria-labelledby="promotion-review-title">
+          <div className="subsection-heading">
+            <h3 id="promotion-review-title">Promotion readiness</h3>
+            <span>{promotionCandidates.length} ready for review</span>
+          </div>
+          <p className="admin-subsection__description">
+            This is a review prompt, never an automatic promotion. The signal uses at least five recorded casework actions in the last 30 days and an active account. Senior staff must assess decision quality, context, and fairness before changing a rank.
+          </p>
+          {promotionCandidates.length ? (
+            <div className="promotion-candidate-list" role="status" aria-live="polite">
+              {promotionCandidates.map((member) => (
+                <article className="panel promotion-candidate" key={member.id}>
+                  <div>
+                    <strong>{member.username || 'Discord member'}</strong>
+                    <span>{ROLES[member.admin_level]} · Level {member.admin_level}</span>
+                  </div>
+                  <span className="promotion-candidate__evidence">{member.promotionActivity} casework actions · 30d</span>
+                </article>
+              ))}
+              <p className="promotion-review-hint">Review evidence in the audit log, check pending staff-conduct reports, then use staff access controls to make any promotion. Each change records the acting staff member.</p>
+              <a className="button button--outline" href="#admin-staff-management">Review staff access</a>
+            </div>
+          ) : (
+            <div className="empty-state empty-state--compact"><p>No one currently meets the activity baseline for a promotion review.</p></div>
+          )}
+        </section>
+      )}
+
+      <PermissionSection id="admin-staff-management" minLevel={5} profile={currentProfile} title="Verified moderators & staff access" description="Senior Admins can manage staff through Level 3. Owners can manage staff through Level 5. Higher-ranked staff and your own account are protected.">
         <div className="panel-list">
           {filterMembers(profiles.filter(canAssign)).map((member) => {
             const maxManagedLevel = rank === 6 ? 5 : 3;
@@ -355,9 +457,34 @@ export default function AdminPanel({
         </div>
       </PermissionSection>
 
-      <PermissionSection id="admin-audit" minLevel={5} profile={currentProfile} title="Staff action history" description="Private audit trail for Senior Admins and Owners. Staff and administrative actions are retained for 30 days to support reviews and promotion decisions.">
+      <PermissionSection id="admin-audit" minLevel={5} profile={currentProfile} title="Staff action history" description="Private audit trail for Senior Admins and Owners. Each event identifies the acting staff member and target. Records are kept for 30 days.">
+        <div className="staff-audit-summary">
+          <article className="panel staff-audit-summary__metric"><span>Recorded actions</span><strong>{staffActions.length}</strong><small>Rolling 30-day window</small></article>
+          <article className="panel staff-audit-summary__metric"><span>Casework actions</span><strong>{reviewableActions.length}</strong><small>Used for promotion review signals</small></article>
+        </div>
+        <div className="staff-activity-chart" aria-label="Staff action counts for the last seven days">
+          {activityByDay.map(({ day, count }) => (
+            <div className="staff-activity-chart__day" key={day.toISOString()} title={`${day.toLocaleDateString()}: ${count} actions`}>
+              <div className="staff-activity-chart__bar-wrap"><span className="staff-activity-chart__bar" style={{ height: `${Math.max(4, count / peakActivity * 100)}%` }} /></div>
+              <small>{day.toLocaleDateString(undefined, { weekday: 'short' })}</small>
+              <b>{count}</b>
+            </div>
+          ))}
+        </div>
+        <div className="admin-filter-bar">
+          <label className="search-field">
+            <span className="sr-only">Search staff action history</span><span aria-hidden="true">⌕</span>
+            <input value={auditSearch} onChange={(event) => setAuditSearch(event.target.value)} placeholder="Search staff, members, or action details" />
+          </label>
+          <label className="admin-filter-select">Action
+            <select value={auditType} onChange={(event) => setAuditType(event.target.value)}>
+              <option value="all">All actions</option>
+              {Array.from(new Set(staffActions.map((entry) => entry.action))).sort().map((action) => <option value={action} key={action}>{ACTION_LABELS[action] || action.replaceAll('_', ' ')}</option>)}
+            </select>
+          </label>
+        </div>
         <div className="staff-audit-list">
-          {staffActions.map((entry) => (
+          {filteredAudit.map((entry) => (
             <article className="panel staff-audit-entry" key={entry.id}>
               <div className="staff-audit-entry__heading">
                 <div>
@@ -378,7 +505,7 @@ export default function AdminPanel({
               )}
             </article>
           ))}
-          {!staffActions.length && <div className="empty-state empty-state--compact"><p>No staff actions have been recorded in the last 30 days.</p></div>}
+          {!filteredAudit.length && <div className="empty-state empty-state--compact"><p>No staff actions match this search.</p></div>}
         </div>
       </PermissionSection>
 
@@ -404,6 +531,32 @@ export default function AdminPanel({
           </label>
           <button className="button button--primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button>
         </form>
+        <form className="panel form-panel ad-manager-form" onSubmit={saveAdSlot}>
+          <div className="profile-section-heading">
+            <div><p className="eyebrow">SPONSORED PLACEMENT</p><h3>Homepage ad slot</h3></div>
+            <label className="ad-enabled-toggle"><input type="checkbox" checked={adSlot.enabled} onChange={(event) => setAdSlot({ ...adSlot, enabled: event.target.checked })} /> Publish</label>
+          </div>
+          <p className="admin-subsection__description">Manage one clearly labelled sponsor placement on the public opportunities page. The placement uses the existing settings row and does not collect impression or click data.</p>
+          <label className="form-field"><span>Sponsor name</span><input maxLength={60} value={adSlot.sponsor || ''} onChange={(event) => setAdSlot({ ...adSlot, sponsor: event.target.value })} placeholder="Sponsor or partner" /></label>
+          <label className="form-field"><span>Headline</span><input required={adSlot.enabled} maxLength={100} value={adSlot.title || ''} onChange={(event) => setAdSlot({ ...adSlot, title: event.target.value })} placeholder="A short, clear sponsor message" /></label>
+          <label className="form-field"><span>Description</span><textarea rows={3} maxLength={300} value={adSlot.description || ''} onChange={(event) => setAdSlot({ ...adSlot, description: event.target.value })} placeholder="What should visitors know about this partner?" /></label>
+          <label className="form-field"><span>Destination URL (HTTPS)</span><input type="url" required={adSlot.enabled} maxLength={500} pattern="https://.+" value={adSlot.url || ''} onChange={(event) => setAdSlot({ ...adSlot, url: event.target.value })} placeholder="https://example.com" /></label>
+          <button className="button button--primary" type="submit" disabled={saving}>{saving ? 'Saving ad slot…' : 'Save ad placement'}</button>
+        </form>
+      </PermissionSection>
+
+      <PermissionSection minLevel={6} profile={currentProfile} title="Website metrics" description="Operational snapshot calculated from data already loaded for the staff workspace. Counts are not a privacy-safe unique visitor metric and no analytics events are written.">
+        <div className="site-metrics-grid">
+          <article className="panel site-metric"><span>Registered accounts</span><strong>{profiles.length}</strong></article>
+          <article className="panel site-metric"><span>All listings</span><strong>{jobs.length}</strong></article>
+          <article className="panel site-metric"><span>Open listings</span><strong>{openListings}</strong></article>
+          <article className="panel site-metric"><span>Featured placements</span><strong>{jobs.filter((job) => job.is_featured).length}</strong></article>
+          <article className="panel site-metric"><span>Applications</span><strong>{applications.length}</strong></article>
+          <article className="panel site-metric"><span>Applications · 30 days</span><strong>{newApplications30d}</strong></article>
+          <article className="panel site-metric"><span>New listings · 30 days</span><strong>{newListings30d}</strong></article>
+          <article className="panel site-metric"><span>Reports awaiting review</span><strong>{pendingReports}</strong></article>
+        </div>
+        <p className="site-metrics-note">For promotion and marketing decisions, use these operational counts alongside actual campaign data. This dashboard deliberately avoids per-visitor tracking, extra analytics tables, and high-volume database writes.</p>
       </PermissionSection>
 
       <PermissionSection minLevel={5} profile={currentProfile} title="Community broadcast" description="Send a notice to every registered account. It will appear in their inbox immediately.">

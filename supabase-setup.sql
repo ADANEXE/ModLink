@@ -291,6 +291,39 @@ $$;
 revoke all on function public.current_admin_level() from public;
 grant execute on function public.current_admin_level() to anon, authenticated;
 
+create or replace function public.admin_promotion_activity()
+returns table (actor_id uuid, casework_actions bigint)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if public.current_admin_level() < 5 then
+    raise exception 'Senior Admin access required';
+  end if;
+  return query
+  select log.actor_id, count(*)
+  from public.staff_action_log as log
+  where log.actor_id is not null
+    and log.created_at > now() - interval '30 days'
+    and log.action in (
+      'report_reviewed',
+      'report_dismissed',
+      'listing_closed',
+      'listing_deleted',
+      'member_warned',
+      'member_suspended',
+      'member_unsuspended'
+    )
+  group by log.actor_id
+  having count(*) >= 5;
+end;
+$$;
+
+revoke all on function public.admin_promotion_activity() from public;
+grant execute on function public.admin_promotion_activity() to authenticated;
+
 create or replace function public.record_staff_action(
   action_name text,
   target_user uuid default null,
@@ -312,12 +345,18 @@ begin
   )
   values (
     auth.uid(),
-    coalesce(nullif(trim((select username from public.profiles where id = auth.uid())), ''), 'Staff member'),
+    coalesce(
+      nullif(trim((select username from public.profiles where id = auth.uid())), ''),
+      nullif(trim(auth.jwt() -> 'user_metadata' ->> 'full_name'), ''),
+      nullif(trim(auth.jwt() -> 'user_metadata' ->> 'name'), ''),
+      'Staff member'
+    ),
     target_user,
     nullif(trim(target_member_name), ''),
     target_listing,
     action_name,
     coalesce(action_details, '{}'::jsonb)
+      || jsonb_build_object('actor_level', public.current_admin_level())
   );
 end;
 $$;
@@ -687,6 +726,7 @@ as $$
 declare
   report_row public.moderation_reports%rowtype;
   listing_title text;
+  reported_staff_level integer;
 begin
   if public.current_admin_level() < 1 then
     raise exception 'Trial Moderator access required';
@@ -704,6 +744,23 @@ begin
   if not found then
     raise exception 'Pending report not found';
   end if;
+  if report_row.report_type = 'staff_conduct' then
+    if public.current_admin_level() < 5 or report_row.reported_user_id is null then
+      raise exception 'Senior Admin access is required to review staff conduct reports';
+    end if;
+    if report_row.reporter_id = auth.uid() then
+      raise exception 'You cannot review a staff conduct report you submitted';
+    end if;
+    select profiles.admin_level into reported_staff_level
+    from public.profiles
+    where profiles.id = report_row.reported_user_id;
+    if not found then
+      raise exception 'Reported staff account is no longer available';
+    end if;
+    if public.current_admin_level() < 6 and reported_staff_level >= public.current_admin_level() then
+      raise exception 'A staff conduct report must be reviewed by a higher-ranked administrator';
+    end if;
+  end if;
   select role_title into listing_title from public.job_listings where id = report_row.job_id;
 
   update public.moderation_reports
@@ -716,7 +773,10 @@ begin
     auth.uid(),
     'report_update',
     case when new_status = 'dismissed' then 'Report reviewed' else 'Action taken on your report' end,
-    coalesce(listing_title, case when report_row.report_type = 'chat' then 'A reported chat conversation' else 'The reported listing' end) || ': ' || trim($3),
+    case
+      when report_row.report_type = 'staff_conduct' then 'A staff conduct report'
+      else coalesce(listing_title, case when report_row.report_type = 'chat' then 'A reported chat conversation' else 'The reported listing' end)
+    end || ': ' || trim($3),
     case when report_row.report_type = 'chat' then 'chat' else 'listing' end,
     case when report_row.report_type = 'chat' then report_row.conversation_id else report_row.job_id end
   );
@@ -1005,11 +1065,36 @@ begin
   if public.current_admin_level() < 6 then
     raise exception 'Owner access required';
   end if;
-  if setting_key not in ('announcement', 'maintenance_mode') then
+  if setting_key not in ('announcement', 'maintenance_mode', 'ad_slot') then
     raise exception 'Unknown site setting';
   end if;
   if setting_key = 'maintenance_mode' and jsonb_typeof(setting_value) is distinct from 'boolean' then
     raise exception 'Maintenance mode must be true or false';
+  end if;
+  if setting_key = 'announcement'
+    and (jsonb_typeof(setting_value) is distinct from 'string' or char_length(setting_value #>> '{}') > 1000) then
+    raise exception 'Announcement must be text no longer than 1000 characters';
+  end if;
+  if setting_key = 'ad_slot' then
+    if jsonb_typeof(setting_value) is distinct from 'object'
+      or jsonb_typeof(setting_value -> 'enabled') is distinct from 'boolean'
+      or (setting_value ? 'sponsor' and jsonb_typeof(setting_value -> 'sponsor') is distinct from 'string')
+      or (setting_value ? 'title' and jsonb_typeof(setting_value -> 'title') is distinct from 'string')
+      or (setting_value ? 'description' and jsonb_typeof(setting_value -> 'description') is distinct from 'string')
+      or (setting_value ? 'url' and jsonb_typeof(setting_value -> 'url') is distinct from 'string')
+      or char_length(coalesce(setting_value ->> 'sponsor', '')) > 60
+      or char_length(coalesce(setting_value ->> 'title', '')) > 100
+      or char_length(coalesce(setting_value ->> 'description', '')) > 300
+      or char_length(coalesce(setting_value ->> 'url', '')) > 500 then
+      raise exception 'Ad placement fields are invalid or too long';
+    end if;
+    if setting_value ->> 'enabled' = 'true'
+      and (
+        char_length(trim(coalesce(setting_value ->> 'title', ''))) < 3
+        or coalesce(setting_value ->> 'url', '') !~ '^https://[^[:space:]]+$'
+      ) then
+      raise exception 'Published ad placements require a headline and HTTPS destination';
+    end if;
   end if;
   select value into previous_value
   from public.site_settings
@@ -1141,7 +1226,26 @@ create policy "Reporters and moderators can read reports"
   on public.moderation_reports for select to authenticated
   using (
     reporter_id = (select auth.uid())
-    or (select public.current_admin_level()) >= 1
+    or (
+      report_type = 'staff_conduct'
+      and reported_user_id <> (select auth.uid())
+      and (
+        (select public.current_admin_level()) = 6
+        or (
+          (select public.current_admin_level()) >= 5
+          and exists (
+            select 1
+            from public.profiles as reported_staff
+            where reported_staff.id = moderation_reports.reported_user_id
+              and reported_staff.admin_level < (select public.current_admin_level())
+          )
+        )
+      )
+    )
+    or (
+      report_type <> 'staff_conduct'
+      and (select public.current_admin_level()) >= 1
+    )
   );
 
 drop policy if exists "Active members can submit listing reports" on public.moderation_reports;
@@ -1154,6 +1258,24 @@ create policy "Active members can submit listing reports"
       where profiles.id = (select auth.uid())
         and (profiles.is_suspended = false or profiles.suspended_until <= now())
     )
+    and (
+      (
+        report_type = 'listing'
+        and job_id is not null
+        and reported_user_id is null
+      )
+      or (
+        report_type = 'staff_conduct'
+        and job_id is null
+        and conversation_id is null
+        and reported_user_id <> (select auth.uid())
+        and exists (
+          select 1 from public.profiles as reported_staff
+          where reported_staff.id = moderation_reports.reported_user_id
+            and reported_staff.admin_level >= 1
+        )
+      )
+    )
   );
 
 drop policy if exists "Owners can read site settings" on public.site_settings;
@@ -1164,7 +1286,7 @@ create policy "Owners can read site settings"
 drop policy if exists "Community can read the site announcement" on public.site_settings;
 create policy "Community can read the site announcement"
   on public.site_settings for select to anon, authenticated
-  using (key in ('announcement', 'maintenance_mode'));
+  using (key in ('announcement', 'maintenance_mode', 'ad_slot'));
 
 drop policy if exists "Users can read their notifications" on public.notifications;
 create policy "Users can read their notifications"

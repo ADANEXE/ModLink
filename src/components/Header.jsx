@@ -7,6 +7,7 @@ export default function Header({
   activeView,
   onNavigate,
   adminLevel,
+  adminReviewCount = 0,
   unreadCount = 0,
   onSignIn,
   onSignOut,
@@ -22,7 +23,7 @@ export default function Header({
       { id: 'notifications', label: 'Inbox', badge: unreadCount },
       { id: 'messages', label: 'Messages' },
     ] : []),
-    ...(user && adminLevel >= 1 ? [{ id: 'admin', label: 'Moderation' }] : []),
+    ...(user && adminLevel >= 1 ? [{ id: 'admin', label: 'Staff dashboard', badge: adminReviewCount }] : []),
   ];
 
   return (
