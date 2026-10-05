@@ -6,6 +6,7 @@ import JobFeed from './components/JobFeed.jsx';
 import AdminPanel from './components/AdminPanel.jsx';
 import ChatPanel from './components/ChatPanel.jsx';
 import NotificationsPanel from './components/NotificationsPanel.jsx';
+import ContactPanel from './components/ContactPanel.jsx';
 import ProfilePanel from './components/ProfilePanel.jsx';
 import { EmployerPanel } from './components/WorkspacePanels.jsx';
 import { getPromotionReviewCandidates } from './lib/staffPromotion.js';
@@ -20,6 +21,7 @@ export default function App() {
   const [reports, setReports] = useState([]);
   const [staffActions, setStaffActions] = useState([]);
   const [promotionActivity, setPromotionActivity] = useState([]);
+  const [prInquiries, setPrInquiries] = useState([]);
   const [warnings, setWarnings] = useState([]);
   const [settings, setSettings] = useState({});
   const [announcement, setAnnouncement] = useState('');
@@ -30,6 +32,7 @@ export default function App() {
   const [selectedConversationId, setSelectedConversationId] = useState(null);
   const [focusListingId, setFocusListingId] = useState(null);
   const [activeView, setActiveView] = useState('opportunities');
+  const [contactTopic, setContactTopic] = useState('general');
   const [authBusy, setAuthBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
@@ -83,7 +86,7 @@ export default function App() {
           .order('created_at', { ascending: false }),
         supabaseClient
           .from('profiles')
-          .select('id, discord_id, username, avatar_url, bio, portfolio_data, admin_level, is_verified_moderator, suspended_until, suspension_reason, is_suspended')
+          .select('id, discord_id, username, avatar_url, bio, portfolio_data, admin_level, is_verified_moderator, is_pr_manager, suspended_until, suspension_reason, is_suspended')
           .eq('id', session.user.id)
           .maybeSingle(),
         supabaseClient
@@ -145,11 +148,20 @@ export default function App() {
         .order('created_at', { ascending: false });
       if (warningsError) setMessage(`Unable to load your moderation notices: ${warningsError.message}`);
       else setWarnings(warningData || []);
+      const { data: prInquiryData, error: prInquiryError } = await supabaseClient
+        .from('pr_inquiries')
+        .select('id, requester_id, topic, subject, message, status, staff_reply, handled_by, created_at, resolved_at, requester:profiles!pr_inquiries_requester_id_fkey(username), handler:profiles!pr_inquiries_handled_by_fkey(username)')
+        .order('created_at', { ascending: false })
+        .limit(100);
+      if (prInquiryError) {
+        setMessage(`Unable to load PR inquiries: ${prInquiryError.message}`);
+        setPrInquiries([]);
+      } else setPrInquiries(prInquiryData || []);
 
       if (!profileResult.error && (profileResult.data?.admin_level ?? 0) >= 5) {
         const [profilesResult, reportsResult, settingsResult, staffActionsResult, promotionActivityResult] = await Promise.all([
           supabaseClient.from('profiles')
-            .select('id, discord_id, username, avatar_url, admin_level, is_verified_moderator, suspended_until, suspension_reason, is_suspended')
+            .select('id, discord_id, username, avatar_url, admin_level, is_verified_moderator, is_pr_manager, suspended_until, suspension_reason, is_suspended')
             .order('username'),
           supabaseClient.from('moderation_reports')
             .select('id, job_id, conversation_id, reported_user_id, report_type, chat_excerpt, reporter_id, reason, staff_reply, status, created_at, job_listings(id, owner_id, server_name, role_title, description, status), profiles!moderation_reports_reporter_id_fkey(username), reported_user:profiles!moderation_reports_reported_user_id_fkey(username), resolved_staff:profiles!moderation_reports_resolved_by_fkey(username), conversation:chat_conversations!moderation_reports_conversation_id_fkey(id, owner_id, applicant_id, job:job_listings!chat_conversations_listing_id_fkey(role_title, server_name))')
@@ -180,7 +192,7 @@ export default function App() {
         const level = profileResult.data?.admin_level ?? 0;
         if (level >= 3) {
           const { data, error } = await supabaseClient.from('profiles')
-            .select('id, discord_id, username, avatar_url, admin_level, is_verified_moderator, suspended_until, suspension_reason, is_suspended')
+            .select('id, discord_id, username, avatar_url, admin_level, is_verified_moderator, is_pr_manager, suspended_until, suspension_reason, is_suspended')
             .order('username');
           if (error) setMessage(`Unable to load member directory: ${error.message}`);
           else setProfiles(data || []);
@@ -211,6 +223,7 @@ export default function App() {
       setSettings({});
       setNotifications([]);
       setConversations([]);
+      setPrInquiries([]);
       setAnnouncement('');
     }
     setLoading(false);
@@ -324,6 +337,35 @@ export default function App() {
     return true;
   }
 
+  async function handleSubmitPrInquiry(topic, subject, inquiryMessage) {
+    const { error } = await supabaseClient.rpc('submit_pr_inquiry', {
+      inquiry_topic: topic,
+      inquiry_subject: subject,
+      inquiry_message: inquiryMessage,
+    });
+    if (error) {
+      setMessage(`Unable to send PR inquiry: ${error.message}`);
+      return false;
+    }
+    setNotice('Your inquiry was sent to the PR team. You can track replies here.');
+    await loadData();
+    return true;
+  }
+
+  async function handleAnswerPrInquiry(inquiryId, reply) {
+    const { error } = await supabaseClient.rpc('answer_pr_inquiry', {
+      target_inquiry_id: inquiryId,
+      reply_message: reply,
+    });
+    if (error) {
+      setMessage(`Unable to reply to PR inquiry: ${error.message}`);
+      return false;
+    }
+    setNotice('Your reply was sent to the requester.');
+    await loadData();
+    return true;
+  }
+
   async function handleStartChat(application) {
     const { data, error } = await supabaseClient.rpc('listing_owner_start_chat', {
       target_application_id: application.id,
@@ -387,6 +429,9 @@ export default function App() {
       setActiveView('opportunities');
     } else if (notification.link_type === 'application') {
       setActiveView(notification.type === 'new_application' ? 'employer' : 'applications');
+    } else if (notification.link_type === 'pr_inquiry') {
+      await loadData();
+      setActiveView('pr-contact');
     }
   }
 
@@ -414,7 +459,7 @@ export default function App() {
       .from('profiles')
       .update({ username: values.username, bio: values.bio, portfolio_data: portfolioData })
       .eq('id', session.user.id)
-      .select('id, discord_id, username, avatar_url, bio, portfolio_data, admin_level, is_verified_moderator, suspended_until, suspension_reason, is_suspended')
+      .select('id, discord_id, username, avatar_url, bio, portfolio_data, admin_level, is_verified_moderator, is_pr_manager, suspended_until, suspension_reason, is_suspended')
       .single();
     if (error) {
       setMessage(`Unable to save profile: ${error.message}`);
@@ -476,6 +521,7 @@ export default function App() {
 
   const adminLevel = profile?.admin_level ?? 0;
   const unreadCount = notifications.filter((notification) => !notification.read_at).length;
+  const prInboxCount = prInquiries.filter((inquiry) => inquiry.status === 'pending' && inquiry.requester_id !== session?.user?.id).length;
   const adminReviewCount = adminLevel >= 5
     ? getPromotionReviewCandidates(profiles, promotionActivity, adminLevel).length
     : 0;
@@ -483,6 +529,9 @@ export default function App() {
     application.job_listings?.owner_id === session?.user?.id,
   );
   const displayName = profile?.username || session?.user?.user_metadata?.full_name || 'Discord member';
+  const hasPublicAd = publicAd?.enabled
+    && publicAd.title
+    && /^https:\/\//i.test(publicAd.url || '');
 
   if (maintenanceMode && adminLevel < 6) {
     return (
@@ -513,6 +562,7 @@ export default function App() {
         onNavigate={setActiveView}
         adminLevel={adminLevel}
         adminReviewCount={adminReviewCount}
+        prInboxCount={prInboxCount}
         unreadCount={unreadCount}
         onSignIn={handleSignIn}
         onSignOut={handleSignOut}
@@ -556,13 +606,21 @@ export default function App() {
               <div><strong>Build</strong><span>healthier communities</span></div>
             </div>
             {announcement && <p className="site-announcement"><span aria-hidden="true">✦</span>{announcement}</p>}
-            {publicAd?.enabled && publicAd.title && /^https:\/\//i.test(publicAd.url || '') && (
+            {hasPublicAd && (
               <a className="sponsored-placement" href={publicAd.url} target="_blank" rel="sponsored noopener noreferrer">
                 <span className="sponsored-placement__label">SPONSORED · {publicAd.sponsor || 'COMMUNITY PARTNER'}</span>
                 <span className="sponsored-placement__title">{publicAd.title}</span>
                 {publicAd.description && <span className="sponsored-placement__copy">{publicAd.description}</span>}
                 <span className="sponsored-placement__cta">Learn more ↗</span>
               </a>
+            )}
+            {!hasPublicAd && (
+              <section className="sponsored-placement sponsored-placement--empty" aria-label="Advertising opportunity">
+                <span className="sponsored-placement__label">ADVERTISING OPPORTUNITY</span>
+                <span className="sponsored-placement__title">Reach Discord community teams</span>
+                <span className="sponsored-placement__copy">Ask our PR team about sponsor placements on ModLink.</span>
+                <button className="sponsored-placement__cta button" type="button" onClick={() => { setContactTopic('advertising'); setActiveView('pr-contact'); }}>Ask about advertising ↗</button>
+              </section>
             )}
             {isSupabaseConfigured && <JobFeed jobs={jobs} focusListingId={focusListingId} onClearFocus={() => setFocusListingId(null)} loading={loading} user={session?.user} profile={profile} onApply={handleApply} onReport={handleReport} onSignIn={handleSignIn} />}
             {!isSupabaseConfigured && (
@@ -595,6 +653,18 @@ export default function App() {
             onMarkRead={handleMarkNotificationRead}
             onMarkAllRead={handleMarkAllNotificationsRead}
             onReportStaffAction={handleReportStaffAction}
+          />
+        )}
+        {activeView === 'pr-contact' && (
+          <ContactPanel
+            user={session?.user}
+            profile={profile}
+            inquiries={prInquiries}
+            initialTopic={contactTopic}
+            onSignIn={handleSignIn}
+            onSubmit={handleSubmitPrInquiry}
+            onAnswer={handleAnswerPrInquiry}
+            onRefresh={loadData}
           />
         )}
         {activeView === 'messages' && session && (
@@ -643,6 +713,7 @@ export default function App() {
               reports={reports}
               staffActions={staffActions}
               promotionActivity={promotionActivity}
+              onSetPrManager={(targetId, enabled) => handleAdminAction('owner_set_pr_manager', { target_user_id: targetId, enabled }, enabled ? 'PR Manager access granted.' : 'PR Manager access removed.')}
               applications={applications}
               settings={settings}
               onCloseListing={(jobId) => handleAdminAction('moderator_close_listing', { target_listing_id: jobId }, 'Listing closed.')}

@@ -12,7 +12,7 @@ A React/Vite Discord staff and moderator hiring hub using Supabase Auth and Post
    VITE_SUPABASE_ANON_KEY=your-anon-key
    ```
 
-3. In the Supabase SQL Editor, run the complete `supabase-setup.sql` script. It is safe to rerun and includes profile backfill for existing accounts. The final query lists each required app table and confirms whether it exists in `public`: `profiles`, `job_listings`, `applications`, `moderation_reports`, `moderation_warnings`, `site_settings`, `notifications`, `chat_conversations`, `chat_messages`, and `staff_action_log`. Supabase-managed `auth.users` and the `pg_cron` extension are not app tables created by this script.
+3. In the Supabase SQL Editor, run the complete `supabase-setup.sql` script. It is safe to rerun and includes profile backfill for existing accounts. The final query lists each required app table and confirms whether it exists in `public`: `profiles`, `job_listings`, `applications`, `moderation_reports`, `moderation_warnings`, `site_settings`, `notifications`, `pr_inquiries`, `chat_conversations`, `chat_messages`, and `staff_action_log`. Supabase-managed `auth.users` and the `pg_cron` extension are not app tables created by this script.
 4. In Supabase **Authentication → Providers**, enable Discord and add the Discord OAuth client credentials. Add `http://localhost:5173` (or your deployed site URL) to the Supabase **Authentication → URL Configuration → Redirect URLs**.
 5. Run `npm run dev`.
 
@@ -33,12 +33,13 @@ The `Deploy frontend to GitHub Pages` workflow deploys the `main` branch to http
 - **Level 4 — Sr Mod:** temporarily suspend lower-ranked accounts from posting and applying (up to 30 days).
 - **Level 5 — Sr Admin:** verify moderators, feature listings, and manage staff through Level 3.
 - **Level 6 — Owner:** all staff controls, manage staff through Level 5, suspend accounts permanently or for up to a year, update site announcements/settings, and turn public maintenance mode on or off.
+- **PR Manager — separate assignment:** an Owner can assign this non-moderation role to any member. PR Managers can review and answer advertising, press, and partnership inquiries but receive no moderation permissions.
 
 Moderation RPCs enforce these levels in Postgres as well as in the UI. Report outcomes include a staff reply in the reporter's inbox; Senior Admins can broadcast a notice to all accounts. A private staff action history is visible only to Senior Admins and Owners and records the acting staff member's name, rank, target, and action for promotion reviews. The promotion panel flags active staff with at least five recorded casework actions in the rolling 30-day audit window for human review; this is an advisory activity threshold, not an automatic promotion or a measure of action quality. Senior staff should review the audit details and pending staff-conduct reports before using the staff access controls.
 
 Members can report a staff action from the related inbox notification. Staff-conduct reports are confidential: Level 5 staff can review reports about lower-ranked staff, and Level 6 Owners can review reports about staff below the Owner rank. A reported staff member cannot review their own report, and the report submitter cannot resolve it. Owner decisions have no higher site rank, so the inbox links those reports to the existing support channel.
 
-Level 6 Owners can manage one clearly labelled HTTPS sponsor placement on the public opportunities page. It uses the existing `site_settings` row; the site does not record ad impressions or clicks. The Owner metrics and seven-day staff action chart are operational counts computed from data already loaded for the staff workspace, not visitor analytics or unique-user measurements. Inbox notifications are deleted after 20 days; staff action history is deleted after 30 days. Applicants and listing owners can chat after the owner starts a conversation and either participant can report it. Chat reports include a server-captured snapshot of up to 100 recent, unexpired messages for moderator review. Regular chat messages expire after 24 hours and `pg_cron` periodically removes expired message, conversation, notification, and staff audit data. The SQL setup enables `pg_cron` and schedules the cleanup job.
+The public opportunities page reserves a clearly labelled advertising space; visitors can contact PR about available placements. Level 6 Owners can manage one HTTPS sponsor placement from the staff workspace. It uses the existing `site_settings` row; the site does not record ad impressions or clicks. The PR contact page requires Discord sign-in, sends inquiries to assigned PR Managers, and lets requesters track replies there. A member can submit up to three inquiries per 24 hours. Inquiries are visible to their requester, assigned PR Managers, and the Owner. Answered inquiries are retained for 30 days; unresolved inquiries remain available until answered. PR role changes and replies are attributed in the staff action history. The Owner metrics and seven-day staff action chart are operational counts computed from data already loaded for the staff workspace, not visitor analytics or unique-user measurements. Inbox notifications are deleted after 20 days; staff action history is deleted after 30 days. Applicants and listing owners can chat after the owner starts a conversation and either participant can report it. Chat reports include a server-captured snapshot of up to 100 recent, unexpired messages for moderator review. Regular chat messages expire after 24 hours and `pg_cron` periodically removes expired message, conversation, notification, resolved inquiry, and staff audit data. The SQL setup enables `pg_cron` and schedules the cleanup job.
 
 When maintenance mode is enabled, visitors see a maintenance page; Level 6 Owners can still access the staff workspace to turn it off.
 
@@ -54,7 +55,7 @@ set admin_level = 6
 where id = 'YOUR-AUTH-USER-UUID';
 ```
 
-Refresh the site to show the **Moderation** navigation item. Level 6 (Owner) can grant lower roles from the staff workspace; role changes are deliberately restricted to trusted database functions.
+Refresh the site to show the **Staff dashboard** in the **My workspace** menu. Level 6 (Owner) can grant lower roles and assign PR Managers from the staff workspace; role changes are deliberately restricted to trusted database functions.
 
 ## Netlify deployment
 

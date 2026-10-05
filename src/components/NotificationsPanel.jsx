@@ -13,6 +13,9 @@ const NOTIFICATION_ICONS = {
   staff_role: '◆',
   moderator_verification: '✓',
   listing_featured: '✦',
+  pr_role: '✦',
+  pr_inquiry: '✉',
+  pr_inquiry_update: '↗',
 };
 
 export default function NotificationsPanel({ notifications, onOpen, onMarkRead, onMarkAllRead, onReportStaffAction }) {

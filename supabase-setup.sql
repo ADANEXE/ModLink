@@ -8,6 +8,7 @@ create table if not exists public.profiles (
   bio text not null default '',
   is_verified_moderator boolean not null default false,
   admin_level integer not null default 0 check (admin_level between 0 and 6),
+  is_pr_manager boolean not null default false,
   portfolio_data jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -49,6 +50,7 @@ create table if not exists public.applications (
 alter table public.profiles
   add column if not exists suspended_until timestamptz,
   add column if not exists suspension_reason text,
+  add column if not exists is_pr_manager boolean not null default false,
   add column if not exists is_suspended boolean not null default false;
 
 update public.profiles
@@ -110,6 +112,19 @@ create table if not exists public.notifications (
   read_at timestamptz
 );
 
+create table if not exists public.pr_inquiries (
+  id uuid primary key default gen_random_uuid(),
+  requester_id uuid not null references public.profiles (id) on delete cascade,
+  topic text not null check (topic in ('advertising', 'press', 'general')),
+  subject text not null check (char_length(subject) between 3 and 120),
+  message text not null check (char_length(message) between 20 and 2000),
+  status text not null default 'pending' check (status in ('pending', 'answered')),
+  staff_reply text,
+  handled_by uuid references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now(),
+  resolved_at timestamptz
+);
+
 create table if not exists public.chat_conversations (
   id uuid primary key default gen_random_uuid(),
   application_id uuid not null unique references public.applications (id) on delete cascade,
@@ -156,6 +171,10 @@ create index if not exists moderation_warnings_target_user_id_idx
   on public.moderation_warnings (target_user_id, created_at desc);
 create index if not exists notifications_user_created_idx
   on public.notifications (user_id, created_at desc);
+create index if not exists pr_inquiries_status_created_at_idx
+  on public.pr_inquiries (status, created_at desc);
+create index if not exists pr_inquiries_requester_created_at_idx
+  on public.pr_inquiries (requester_id, created_at desc);
 create index if not exists staff_action_log_created_at_idx
   on public.staff_action_log (created_at desc);
 create index if not exists chat_messages_conversation_expiry_idx
@@ -291,6 +310,22 @@ $$;
 revoke all on function public.current_admin_level() from public;
 grant execute on function public.current_admin_level() to anon, authenticated;
 
+create or replace function public.current_is_pr_manager()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select coalesce(
+    (select profiles.is_pr_manager from public.profiles where profiles.id = auth.uid()),
+    false
+  );
+$$;
+
+revoke all on function public.current_is_pr_manager() from public;
+grant execute on function public.current_is_pr_manager() to authenticated;
+
 create or replace function public.admin_promotion_activity()
 returns table (actor_id uuid, casework_actions bigint)
 language plpgsql
@@ -337,7 +372,7 @@ security definer
 set search_path = ''
 as $$
 begin
-  if public.current_admin_level() < 1 then
+  if public.current_admin_level() < 1 and not public.current_is_pr_manager() then
     raise exception 'Staff access required to write the staff action log';
   end if;
   insert into public.staff_action_log (
@@ -362,6 +397,173 @@ end;
 $$;
 
 revoke all on function public.record_staff_action(text, uuid, text, uuid, jsonb) from public, anon, authenticated;
+
+create or replace function public.owner_set_pr_manager(target_user_id uuid, enabled boolean)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  previous_value boolean;
+  target_name text;
+begin
+  if public.current_admin_level() < 6 then
+    raise exception 'Owner access required';
+  end if;
+  if enabled is null then
+    raise exception 'PR Manager access must be on or off';
+  end if;
+  select profiles.is_pr_manager, profiles.username
+  into previous_value, target_name
+  from public.profiles
+  where profiles.id = target_user_id
+  for update;
+  if not found then
+    raise exception 'Member not found';
+  end if;
+  if previous_value = enabled then
+    return;
+  end if;
+  update public.profiles
+  set is_pr_manager = enabled
+  where id = target_user_id;
+  insert into public.notifications (user_id, actor_id, type, title, body)
+  values (
+    target_user_id,
+    auth.uid(),
+    'pr_role',
+    case when enabled then 'PR Manager access granted' else 'PR Manager access removed' end,
+    case when enabled then 'You can now manage public relations inquiries.' else 'You no longer have access to the PR inbox.' end
+  );
+  perform public.record_staff_action(
+    'pr_manager_role_changed',
+    target_user_id,
+    target_name,
+    null,
+    jsonb_build_object('previous_value', previous_value, 'new_value', enabled)
+  );
+end;
+$$;
+
+create or replace function public.submit_pr_inquiry(inquiry_topic text, inquiry_subject text, inquiry_message text)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  new_inquiry_id uuid;
+  manager record;
+  recent_inquiries integer;
+begin
+  if auth.uid() is null then
+    raise exception 'Sign in with Discord to contact the PR team';
+  end if;
+  if inquiry_topic is null
+    or inquiry_topic not in ('advertising', 'press', 'general')
+    or char_length(trim(coalesce(inquiry_subject, ''))) < 3
+    or char_length(inquiry_subject) > 120
+    or char_length(trim(coalesce(inquiry_message, ''))) < 20
+    or char_length(inquiry_message) > 2000 then
+    raise exception 'Check the topic, subject, and message length';
+  end if;
+  perform profiles.id from public.profiles where profiles.id = auth.uid() for update;
+  if not found then
+    raise exception 'Your profile is not ready yet; try again shortly';
+  end if;
+  if exists (
+    select 1 from public.profiles
+    where profiles.id = auth.uid()
+      and profiles.is_suspended
+      and (profiles.suspended_until is null or profiles.suspended_until > now())
+  ) then
+    raise exception 'Suspended accounts cannot submit PR inquiries';
+  end if;
+  if not exists (select 1 from public.profiles where is_pr_manager) then
+    raise exception 'The PR team is not accepting inquiries right now';
+  end if;
+  select count(*) into recent_inquiries
+  from public.pr_inquiries
+  where requester_id = auth.uid()
+    and created_at > now() - interval '24 hours';
+  if recent_inquiries >= 3 then
+    raise exception 'You can send up to three PR inquiries every 24 hours';
+  end if;
+  insert into public.pr_inquiries (requester_id, topic, subject, message)
+  values (auth.uid(), inquiry_topic, trim(inquiry_subject), trim(inquiry_message))
+  returning id into new_inquiry_id;
+  for manager in
+    select profiles.id
+    from public.profiles
+    where profiles.is_pr_manager
+      and profiles.id <> auth.uid()
+  loop
+    insert into public.notifications (user_id, actor_id, type, title, body, link_type, link_id)
+    values (
+      manager.id,
+      auth.uid(),
+      'pr_inquiry',
+      'New PR inquiry',
+      trim(inquiry_subject),
+      'pr_inquiry',
+      new_inquiry_id
+    );
+  end loop;
+  return new_inquiry_id;
+end;
+$$;
+
+create or replace function public.answer_pr_inquiry(target_inquiry_id uuid, reply_message text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  inquiry_row public.pr_inquiries%rowtype;
+begin
+  if public.current_admin_level() < 6 and not public.current_is_pr_manager() then
+    raise exception 'PR Manager access required';
+  end if;
+  if reply_message is null or char_length(trim(reply_message)) < 3 or char_length(reply_message) > 2000 then
+    raise exception 'A reply between 3 and 2000 characters is required';
+  end if;
+  select * into inquiry_row
+  from public.pr_inquiries
+  where id = target_inquiry_id and status = 'pending'
+  for update;
+  if not found then
+    raise exception 'Pending PR inquiry not found';
+  end if;
+  if inquiry_row.requester_id = auth.uid() then
+    raise exception 'You cannot reply to your own inquiry';
+  end if;
+  update public.pr_inquiries
+  set status = 'answered',
+      staff_reply = trim(reply_message),
+      handled_by = auth.uid(),
+      resolved_at = now()
+  where id = target_inquiry_id;
+  insert into public.notifications (user_id, actor_id, type, title, body, link_type, link_id)
+  values (
+    inquiry_row.requester_id,
+    auth.uid(),
+    'pr_inquiry_update',
+    'The PR team replied to your inquiry',
+    trim(reply_message),
+    'pr_inquiry',
+    target_inquiry_id
+  );
+  perform public.record_staff_action(
+    'pr_inquiry_answered',
+    inquiry_row.requester_id,
+    (select profiles.username from public.profiles where profiles.id = inquiry_row.requester_id),
+    null,
+    jsonb_build_object('inquiry_id', target_inquiry_id, 'topic', inquiry_row.topic)
+  );
+end;
+$$;
 
 create or replace function public.admin_set_member_level(target_user_id uuid, new_level integer)
 returns void
@@ -1050,6 +1252,9 @@ begin
     );
   delete from public.notifications where created_at <= now() - interval '20 days';
   delete from public.staff_action_log where created_at <= now() - interval '30 days';
+  delete from public.pr_inquiries
+  where status = 'answered'
+    and resolved_at <= now() - interval '30 days';
 end;
 $$;
 
@@ -1118,6 +1323,9 @@ end;
 $$;
 
 revoke all on function public.admin_set_member_level(uuid, integer) from public;
+revoke all on function public.owner_set_pr_manager(uuid, boolean) from public;
+revoke all on function public.submit_pr_inquiry(text, text, text) from public;
+revoke all on function public.answer_pr_inquiry(uuid, text) from public;
 revoke all on function public.admin_set_moderator_verified(uuid, boolean) from public;
 revoke all on function public.admin_set_listing_featured(uuid, boolean) from public;
 revoke all on function public.moderator_close_listing(uuid) from public;
@@ -1132,6 +1340,9 @@ revoke all on function public.send_chat_message(uuid, text) from public;
 revoke all on function public.submit_chat_report(uuid, text) from public;
 revoke all on function public.cleanup_expired_chat_data() from public;
 grant execute on function public.admin_set_member_level(uuid, integer) to authenticated;
+grant execute on function public.owner_set_pr_manager(uuid, boolean) to authenticated;
+grant execute on function public.submit_pr_inquiry(text, text, text) to authenticated;
+grant execute on function public.answer_pr_inquiry(uuid, text) to authenticated;
 grant execute on function public.admin_set_moderator_verified(uuid, boolean) to authenticated;
 grant execute on function public.admin_set_listing_featured(uuid, boolean) to authenticated;
 grant execute on function public.moderator_close_listing(uuid) to authenticated;
@@ -1155,6 +1366,7 @@ alter table public.notifications enable row level security;
 alter table public.chat_conversations enable row level security;
 alter table public.chat_messages enable row level security;
 alter table public.staff_action_log enable row level security;
+alter table public.pr_inquiries enable row level security;
 
 grant select on public.profiles to authenticated;
 grant select on public.job_listings to anon, authenticated;
@@ -1167,6 +1379,7 @@ revoke all on public.notifications from anon, authenticated;
 revoke all on public.chat_conversations from anon, authenticated;
 revoke all on public.chat_messages from anon, authenticated;
 revoke all on public.staff_action_log from anon, authenticated;
+revoke all on public.pr_inquiries from anon, authenticated;
 grant select, insert on public.moderation_reports to authenticated;
 grant select on public.moderation_warnings to authenticated;
 grant select on public.site_settings to anon, authenticated;
@@ -1174,6 +1387,7 @@ grant select, update (read_at) on public.notifications to authenticated;
 grant select on public.chat_conversations to authenticated;
 grant select on public.chat_messages to authenticated;
 grant select on public.staff_action_log to authenticated;
+grant select on public.pr_inquiries to authenticated;
 
 -- Profile role and verification fields are managed by trusted server-side tooling.
 revoke update on public.profiles from authenticated;
@@ -1205,6 +1419,7 @@ create policy "Users can create their own base profile"
     id = (select auth.uid())
     and admin_level = 0
     and is_verified_moderator = false
+    and is_pr_manager = false
   );
 
 drop policy if exists "Users can update their own profile" on public.profiles;
@@ -1306,6 +1521,15 @@ create policy "Users can mark their notifications read"
   with check (
     user_id = (select auth.uid())
     and created_at > now() - interval '20 days'
+  );
+
+drop policy if exists "Requesters and PR Managers can read PR inquiries" on public.pr_inquiries;
+create policy "Requesters and PR Managers can read PR inquiries"
+  on public.pr_inquiries for select to authenticated
+  using (
+    requester_id = (select auth.uid())
+    or (select public.current_is_pr_manager())
+    or (select public.current_admin_level()) >= 6
   );
 
 drop policy if exists "Senior admins can read staff action history" on public.staff_action_log;
@@ -1445,6 +1669,7 @@ with required_tables(table_name) as (
     ('moderation_reports'),
     ('moderation_warnings'),
     ('site_settings'),
+    ('pr_inquiries'),
     ('notifications'),
     ('chat_conversations'),
     ('chat_messages'),
@@ -1466,6 +1691,7 @@ where table_schema = 'public'
     'moderation_reports',
     'moderation_warnings',
     'site_settings',
+    'pr_inquiries',
     'notifications',
     'chat_conversations',
     'chat_messages',

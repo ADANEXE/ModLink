@@ -18,6 +18,8 @@ const ACTION_LABELS = {
   report_dismissed: 'Report dismissed',
   community_broadcast_sent: 'Community broadcast sent',
   site_setting_changed: 'Site setting changed',
+  pr_manager_role_changed: 'PR Manager access changed',
+  pr_inquiry_answered: 'PR inquiry answered',
 };
 
 function formatAuditValue(value) {
@@ -55,6 +57,7 @@ export default function AdminPanel({
   onSetVerified,
   onSetFeatured,
   onResolveReport,
+  onSetPrManager,
   onSaveSetting,
   onBroadcast,
 }) {
@@ -72,6 +75,7 @@ export default function AdminPanel({
   const [listingStatus, setListingStatus] = useState('all');
   const [listingSearch, setListingSearch] = useState('');
   const [memberSearch, setMemberSearch] = useState('');
+  const [prManagerSearch, setPrManagerSearch] = useState('');
   const [auditSearch, setAuditSearch] = useState('');
   const [auditType, setAuditType] = useState('all');
   const [adSlot, setAdSlot] = useState({
@@ -185,6 +189,12 @@ export default function AdminPanel({
       setBroadcastTitle('');
       setBroadcastBody('');
     }
+  }
+
+  async function setPrManager(member) {
+    setSaving(true);
+    await onSetPrManager(member.id, !member.is_pr_manager);
+    setSaving(false);
   }
 
   return (
@@ -454,6 +464,27 @@ export default function AdminPanel({
             );
           })}
           {!filterMembers(profiles.filter(canAssign)).length && <div className="empty-state empty-state--compact"><p>No staff members match your search.</p></div>}
+        </div>
+      </PermissionSection>
+
+      <PermissionSection minLevel={6} profile={currentProfile} title="PR Manager access" description="Assign the separate PR Manager role to members who should receive advertising, press, and partnership inquiries. This role does not grant moderation or staff-level permissions.">
+        <label className="search-field admin-directory-search">
+          <span className="sr-only">Search PR Manager accounts</span><span aria-hidden="true">⌕</span>
+          <input value={prManagerSearch} onChange={(event) => setPrManagerSearch(event.target.value)} placeholder="Find an account by name or Discord ID" />
+        </label>
+        <div className="panel-list">
+          {profiles.filter((member) => `${member.username} ${member.discord_id || ''}`.toLowerCase().includes(prManagerSearch.trim().toLowerCase())).map((member) => (
+            <article className="panel pr-manager-row" key={member.id}>
+              <div>
+                <strong>{member.username || 'Discord member'}</strong>
+                <span>{member.discord_id ? `Discord ID ${member.discord_id}` : member.id}</span>
+              </div>
+              <button className={`button ${member.is_pr_manager ? 'button--primary' : 'button--outline'}`} type="button" onClick={() => setPrManager(member)} disabled={saving || member.id === currentProfile?.id}>
+                {member.is_pr_manager ? 'Remove PR Manager' : 'Assign PR Manager'}
+              </button>
+            </article>
+          ))}
+          {!profiles.some((member) => `${member.username} ${member.discord_id || ''}`.toLowerCase().includes(prManagerSearch.trim().toLowerCase())) && <div className="empty-state empty-state--compact"><p>No accounts match this search.</p></div>}
         </div>
       </PermissionSection>
 
