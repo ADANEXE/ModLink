@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" fill="none">
+  <defs>
+    <linearGradient id="background" x1="70" y1="22" x2="1110" y2="630" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#111B35"/>
+      <stop offset="1" stop-color="#080E1E"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="147" y1="187" x2="877" y2="507" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8290FF"/>
+      <stop offset="1" stop-color="#5865F2"/>
+    </linearGradient>
+    <linearGradient id="card" x1="758" y1="118" x2="1100" y2="524" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#202D4B"/>
+      <stop offset="1" stop-color="#121B30"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="matrix(390 0 0 310 933 284)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5865F2" stop-opacity=".32"/>
+      <stop offset="1" stop-color="#5865F2" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <path fill="url(#background)" d="M0 0h1200v630H0z"/>
+  <path fill="url(#glow)" d="M541 0h659v630H541z"/>
+  <circle cx="99" cy="99" r="2" fill="#A5ADFF" fill-opacity=".6"/>
+  <circle cx="658" cy="82" r="2" fill="#A5ADFF" fill-opacity=".5"/>
+  <circle cx="594" cy="557" r="2" fill="#A5ADFF" fill-opacity=".5"/>
+  <circle cx="1101" cy="104" r="3" fill="#A5ADFF" fill-opacity=".55"/>
+  <rect x="82" y="72" width="51" height="51" rx="15" fill="#5865F2"/>
+  <text x="107.5" y="108" fill="#fff" font-family="Arial,sans-serif" font-size="30" font-weight="700" text-anchor="middle">M</text>
+  <text x="151" y="108" fill="#F5F6FF" font-family="Arial,sans-serif" font-size="34" font-weight="700" letter-spacing="-1.5">mod</text>
+  <text x="218" y="108" fill="#909BFF" font-family="Arial,sans-serif" font-size="34" font-weight="700" letter-spacing="-1.5">link</text>
+  <rect x="83" y="188" width="326" height="38" rx="19" fill="#5865F2" fill-opacity=".12" stroke="#929AFF" stroke-opacity=".32"/>
+  <circle cx="106" cy="207" r="4" fill="#9EA7FF"/>
+  <text x="123" y="212" fill="#B7BFFF" font-family="Arial,sans-serif" font-size="14" font-weight="700" letter-spacing="2">THE DISCORD COMMUNITY STAFF NETWORK</text>
+  <text x="82" y="306" fill="#F4F5FC" font-family="Arial,sans-serif" font-size="60" font-weight="700" letter-spacing="-2">Find your next role</text>
+  <text x="82" y="375" fill="#909BFF" font-family="Arial,sans-serif" font-size="60" font-weight="700" letter-spacing="-2">in a great community.</text>
+  <text x="86" y="432" fill="#B5BED1" font-family="Arial,sans-serif" font-size="21">Discord moderator jobs, gaming server staff roles,</text>
+  <text x="86" y="464" fill="#B5BED1" font-family="Arial,sans-serif" font-size="21">and community team opportunities—all in one place.</text>
+  <rect x="82" y="512" width="262" height="57" rx="12" fill="url(#accent)"/>
+  <text x="213" y="548" fill="#fff" font-family="Arial,sans-serif" font-size="18" font-weight="700" text-anchor="middle">Explore open roles  →</text>
+  <circle cx="930" cy="319" r="211" stroke="#8794FF" stroke-opacity=".15"/>
+  <circle cx="930" cy="319" r="168" stroke="#8794FF" stroke-opacity=".12"/>
+  <g transform="rotate(-5 936 315)">
+    <rect x="765" y="152" width="342" height="330" rx="25" fill="url(#card)" stroke="#9AA7FF" stroke-opacity=".3"/>
+    <rect x="796" y="183" width="48" height="48" rx="15" fill="#5865F2"/>
+    <text x="820" y="215" fill="#fff" font-family="Arial,sans-serif" font-size="26" font-weight="700" text-anchor="middle">M</text>
+    <rect x="925" y="194" width="151" height="27" rx="13.5" fill="#55C7A3" fill-opacity=".12"/>
+    <circle cx="943" cy="207.5" r="4" fill="#55C7A3"/>
+    <text x="954" y="212" fill="#9FE3CC" font-family="Arial,sans-serif" font-size="12" font-weight="700">OPEN OPPORTUNITIES</text>
+    <text x="797" y="280" fill="#9DA7FF" font-family="Arial,sans-serif" font-size="13" font-weight="700" letter-spacing="2">COMMUNITY OPPORTUNITIES</text>
+    <text x="797" y="326" fill="#F4F5FC" font-family="Arial,sans-serif" font-size="31" font-weight="700">Find your team.</text>
+    <text x="797" y="360" fill="#AAB5CA" font-family="Arial,sans-serif" font-size="17">Moderation · Support · Community</text>
+    <path d="M797 390h278" stroke="#AAB5CA" stroke-opacity=".15"/>
+    <text x="797" y="430" fill="#B9C0FF" font-family="Arial,sans-serif" font-size="15" font-weight="700">✦  Built for Discord communities</text>
+  </g>
+  <rect x="704" y="459" width="272" height="75" rx="16" fill="#1A2740" stroke="#AAB5CA" stroke-opacity=".18"/>
+  <circle cx="738" cy="496" r="15" fill="#55C7A3" fill-opacity=".17"/>
+  <path d="m731 496 5 5 10-11" stroke="#76E0BC" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
+  <text x="766" y="493" fill="#E6EAF4" font-family="Arial,sans-serif" font-size="15" font-weight="700">Your next chapter</text>
+  <text x="766" y="514" fill="#98A3BB" font-family="Arial,sans-serif" font-size="12">Find a community role that fits</text>
+</svg>

@@ -18,7 +18,7 @@ A React/Vite Discord staff and moderator hiring hub using Supabase Auth and Post
 
 The site supports browsing open listings, Discord sign-in, applying to roles, a personal dashboard with an editable introduction and portfolio link, tracking applications, publishing and managing listings, a searchable tiered moderation workspace, account notifications, private lister/applicant chats, and Owner-controlled maintenance mode. Applicants can share their profile bio and portfolio link with listing owners alongside applications.
 
-The public landing page includes a search-focused title and description, Open Graph metadata, WebSite structured data, a crawler policy, sitemap, and branded favicon. These improve technical discoverability but cannot guarantee search placement; rankings also depend on search-engine indexing, external references, content quality, and competition.
+The public landing page includes a search-focused title and description, Open Graph/Twitter sharing metadata and artwork, WebSite/Organization structured data, a live ItemList for open roles, visible role-focused guidance and FAQs, a crawler policy, sitemap, and branded favicon. These improve technical discoverability but cannot guarantee search placement; rankings also depend on indexing, page performance, external references, content quality, and competition. The application is a client-rendered single-page site, so search engines must render its JavaScript to see live listings; individual roles do not yet have separate crawlable URLs or server-rendered JobPosting pages.
 
 ### GitHub Pages deployment
 

@@ -36,19 +36,23 @@ export default function JobFeed({ jobs, ads = [], focusListingId, onClearFocus, 
     return (
       <article className="job-card" key={`job-${job.id}`}>
         <div className="job-card__top">
-          <span className="server-avatar server-avatar--violet" aria-hidden="true">
+          <span className="server-avatar server-avatar--violet job-card__server-mark" aria-hidden="true">
             {job.server_name.slice(0, 2).toUpperCase()}
           </span>
           {job.is_featured
-            ? <span className="featured-label"><span aria-hidden="true">✦</span> Featured</span>
-            : <span className="job-status">Open role</span>}
+            ? <span className="featured-label job-card__featured"><span aria-hidden="true">✦</span> Featured role</span>
+            : <span className="job-status job-card__open"><i /> Accepting applications</span>}
         </div>
-        <p className="job-card__server">{job.server_name}</p>
-        <h3>{job.role_title}</h3>
+        <p className="job-card__server"><span aria-hidden="true">◈</span> {job.server_name}</p>
+        <h3 className="job-card__title">{job.role_title}</h3>
         <p className="job-card__detail job-card__description">{job.description || 'Join this community and help make it a welcoming place.'}</p>
+        <div className="job-card__posted">
+          <span>Discord community role</span>
+          {job.created_at && <time dateTime={job.created_at}>Posted {new Date(job.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</time>}
+        </div>
         <div className="job-card__actions">
           <button className="job-card__action" type="button" onClick={() => { setDialogMode('apply'); setSelectedJob(job); }}>
-            View role & apply <span aria-hidden="true">→</span>
+            View role & application details <span aria-hidden="true">→</span>
           </button>
           {user && (
             <button className="report-link" type="button" onClick={() => { setDialogMode('report'); setSelectedJob(job); }}>
@@ -98,9 +102,9 @@ export default function JobFeed({ jobs, ads = [], focusListingId, onClearFocus, 
     <section className="opportunities" id="opportunities" aria-labelledby="feed-title">
       <div className="section-heading">
         <div>
-          <p className="eyebrow">CURATED FOR YOU</p>
-          <h2 id="feed-title">Open opportunities</h2>
-          <p className="section-heading__copy">Find a community that feels like the right fit.</p>
+          <p className="eyebrow">FIND YOUR NEXT COMMUNITY ROLE</p>
+          <h2 id="feed-title">Open Discord staff opportunities</h2>
+          <p className="section-heading__copy">Browse moderator jobs and community team openings posted by Discord servers.</p>
         </div>
         <label className="search-field">
           <span className="sr-only">Search jobs</span>
@@ -114,6 +118,21 @@ export default function JobFeed({ jobs, ads = [], focusListingId, onClearFocus, 
           <input type="checkbox" checked={featuredOnly} onChange={(event) => setFeaturedOnly(event.target.checked)} />
           Featured only
         </label>
+      </div>
+      <div className="role-search-chips" aria-label="Popular role searches">
+        <span>Popular:</span>
+        {['Moderator', 'Community', 'Support', 'Gaming'].map((term) => (
+          <button
+            className={search.toLowerCase() === term.toLowerCase() ? 'is-active' : ''}
+            type="button"
+            key={term}
+            aria-pressed={search.toLowerCase() === term.toLowerCase()}
+            onClick={() => setSearch(search.toLowerCase() === term.toLowerCase() ? '' : term)}
+          >
+            {term}
+          </button>
+        ))}
+        {search && <button className="role-search-chips__clear" type="button" onClick={() => setSearch('')}>Clear filters</button>}
       </div>
       {loading ? (
         <div className="empty-state"><span className="loading-spinner" />Loading opportunities</div>

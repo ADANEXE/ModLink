@@ -127,7 +127,10 @@ export default function App() {
       .eq('is_active', true)
       .order('created_at', { ascending: false });
     if (campaignsError) {
-      setMessage(`Unable to load advertising campaigns: ${campaignsError.message}`);
+      const signedInLevel = session?.user ? results[2]?.data?.admin_level ?? 0 : 0;
+      if (signedInLevel >= 6) {
+        setMessage(`Unable to load advertising campaigns. Run the latest supabase-setup.sql to install the ad campaign table. Details: ${campaignsError.message}`);
+      }
       setAdCampaigns([]);
     } else setAdCampaigns(activeAdCampaigns || []);
 
@@ -560,6 +563,23 @@ export default function App() {
     application.job_listings?.owner_id === session?.user?.id,
   );
   const displayName = profile?.username || session?.user?.user_metadata?.full_name || 'Discord member';
+  const openJobs = jobs
+    .filter((job) => job.status === 'open')
+    .sort((first, second) => new Date(second.created_at) - new Date(first.created_at));
+  const featuredJobs = openJobs.filter((job) => job.is_featured);
+  const homepageJobList = {
+    '@context': 'https://schema.org',
+    '@type': 'ItemList',
+    name: 'Open Discord community staff opportunities on ModLink',
+    numberOfItems: openJobs.length,
+    itemListElement: openJobs.slice(0, 20).map((job, index) => ({
+      '@type': 'ListItem',
+      position: index + 1,
+      name: `${job.role_title} at ${job.server_name}`,
+      description: job.description || `Open ${job.role_title} opportunity at ${job.server_name}.`,
+    })),
+  };
+
   if (maintenanceMode && adminLevel < 6) {
     return (
       <div className="maintenance-page">
@@ -600,38 +620,64 @@ export default function App() {
           <>
             <section className="hero">
               <div className="hero__content">
-                <span className="hero__badge"><span aria-hidden="true">✦</span> THE COMMUNITY STAFF NETWORK</span>
-                <h1>Discord moderator jobs<br />for <span>great communities.</span></h1>
+                <span className="hero__badge"><span aria-hidden="true">✦</span> THE DISCORD COMMUNITY STAFF NETWORK</span>
+                <h1>Discord moderator jobs for <span>great communities.</span></h1>
                 <p className="hero__copy">
-                  Find Discord moderator and community staff jobs, meet experienced teams, and discover your next opportunity to make online communities better.
+                  Explore Discord moderator jobs and community staff roles—from moderation and support to community leadership. Meet the teams behind gaming communities and help make online spaces better.
                 </p>
                 <div className="hero__actions">
                   <a className="button button--primary button--large" href="#opportunities">
-                    Explore opportunities <span aria-hidden="true">→</span>
+                    Browse open roles <span aria-hidden="true">→</span>
                   </a>
                   <button className="button button--outline button--large" onClick={session ? () => setActiveView('employer') : handleSignIn} disabled={authBusy}>
-                    {session ? 'Post a staff role' : 'Join the community'}
+                    {session ? 'Post a staff role' : 'Hire community staff'}
                   </button>
                 </div>
-                <div className="hero__proof">
-                  <span className="proof-avatars" aria-hidden="true"><span>J</span><span>M</span><span>A</span><span>+</span></span>
-                  <span>Built for the people behind the communities</span>
+                <div className="hero__trust">
+                  <span><span aria-hidden="true">✓</span> Discord-first hiring</span>
+                  <span><span aria-hidden="true">✓</span> Roles from community teams</span>
+                  <span><span aria-hidden="true">✓</span> Apply with your experience</span>
                 </div>
               </div>
-              <div className="hero__visual" aria-hidden="true">
-                <div className="orbit orbit--outer" /><div className="orbit orbit--inner" />
-                <div className="visual-card visual-card--main">
-                  <span className="visual-card__icon">✦</span><div className="visual-card__lines"><i /><i /><i /></div><span className="visual-card__check">✓</span>
-                </div>
-                <div className="visual-card visual-card--floating"><span className="status-dot" /><span>Community first</span></div>
-                <span className="sparkle sparkle--one">✦</span><span className="sparkle sparkle--two">✧</span>
+              <div className="hero__visual" aria-label="ModLink Discord community roles overview">
+                <div className="hero-orbit hero-orbit--one" aria-hidden="true" />
+                <div className="hero-orbit hero-orbit--two" aria-hidden="true" />
+                <article className="hero-opportunity-card">
+                  <div className="hero-opportunity-card__top">
+                    <span className="hero-opportunity-card__icon" aria-hidden="true">M</span>
+                    <span className="hero-opportunity-card__live"><i /> {loading ? 'Finding roles' : `${openJobs.length} open ${openJobs.length === 1 ? 'role' : 'roles'}`}</span>
+                  </div>
+                  <p className="eyebrow">COMMUNITY OPPORTUNITIES</p>
+                  <h2>{featuredJobs[0]?.role_title || 'Find your place on the team'}</h2>
+                  <p className="hero-opportunity-card__server">{featuredJobs[0]?.server_name || 'Moderation · support · community'}</p>
+                  <div className="hero-opportunity-card__divider" />
+                  <div className="hero-opportunity-card__bottom">
+                    <span><span aria-hidden="true">✦</span> {featuredJobs.length ? 'Featured opportunity' : 'A better way to find your team'}</span>
+                    <a href="#opportunities" aria-label="Explore Discord community staff roles">Explore <span aria-hidden="true">↗</span></a>
+                  </div>
+                  {featuredJobs[0]?.description && <p className="hero-opportunity-card__description">{featuredJobs[0].description}</p>}
+                </article>
+                <div className="hero-float-card hero-float-card--top"><span className="hero-float-card__sparkle" aria-hidden="true">✦</span><span><strong>Built for Discord</strong><small>Community teams start here</small></span></div>
+                <div className="hero-float-card hero-float-card--bottom"><span className="hero-float-card__check" aria-hidden="true">✓</span><span><strong>Your next chapter</strong><small>Find a role that fits</small></span></div>
+                <div className="hero-visual-glow" aria-hidden="true" />
+                <span className="hero-visual-spark hero-visual-spark--one" aria-hidden="true">✦</span>
+                <span className="hero-visual-spark hero-visual-spark--two" aria-hidden="true">✧</span>
               </div>
             </section>
-            <div className="stats-bar" aria-label="ModLink community">
-              <div><strong>Find</strong><span>your next role</span></div>
-              <div><strong>Meet</strong><span>your next teammate</span></div>
-              <div><strong>Build</strong><span>healthier communities</span></div>
+            <div className="stats-bar stats-bar--live" aria-label="Live ModLink opportunity summary">
+              <div><strong>{loading ? '—' : openJobs.length}</strong><span>open staff {openJobs.length === 1 ? 'role' : 'roles'}</span></div>
+              <div><strong>{loading ? '—' : featuredJobs.length}</strong><span>featured {featuredJobs.length === 1 ? 'opportunity' : 'opportunities'}</span></div>
+              <div><strong>Discord</strong><span>moderator & community teams</span></div>
             </div>
+            <section className="home-role-strip" aria-label="Community staff roles">
+              <span>Find your next opportunity</span>
+              <div>
+                <span>Discord moderator jobs</span>
+                <span>Community manager roles</span>
+                <span>Gaming server staff</span>
+                <span>Online community support</span>
+              </div>
+            </section>
             {announcement && <p className="site-announcement"><span aria-hidden="true">✦</span>{announcement}</p>}
             {adCampaigns.some((campaign) => campaign.placements?.includes('homepage')) && (
               <div className="sponsored-grid" aria-label="Sponsored campaigns">
@@ -651,6 +697,58 @@ export default function App() {
               <p className="config-notice" role="status">
                 Supabase isn’t configured yet. Add <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> to <code>.env</code>, then restart Vite to enable accounts and live listings.
               </p>
+            )}
+            <section className="home-how-it-works" aria-labelledby="home-how-heading">
+              <div className="home-section-heading">
+                <p className="eyebrow">A BETTER WAY TO BUILD YOUR TEAM</p>
+                <h2 id="home-how-heading">Good communities grow with good people.</h2>
+                <p>Whether you’re looking for your first moderator role or building a trusted staff team, ModLink brings Discord community opportunities together in one place.</p>
+              </div>
+              <div className="home-benefit-grid">
+                <article className="home-benefit-card">
+                  <span className="home-benefit-card__icon" aria-hidden="true">⌕</span>
+                  <p className="eyebrow">FOR COMMUNITY STAFF</p>
+                  <h3>Find a role that fits you</h3>
+                  <p>Discover open Discord moderator, server staff, community support, and leadership opportunities. Search role titles and server descriptions, then share your relevant experience when you apply.</p>
+                  <a href="#opportunities">Explore open opportunities <span aria-hidden="true">→</span></a>
+                </article>
+                <article className="home-benefit-card home-benefit-card--accent">
+                  <span className="home-benefit-card__icon" aria-hidden="true">✦</span>
+                  <p className="eyebrow">FOR COMMUNITY OWNERS</p>
+                  <h3>Meet your next teammate</h3>
+                  <p>Publish a staff opening for your Discord server, explain the role and expectations, and review applications from people ready to help your community thrive.</p>
+                  <button type="button" onClick={session ? () => setActiveView('employer') : handleSignIn} disabled={authBusy}>
+                    {session ? 'Create a staff listing' : 'Sign in to post a role'} <span aria-hidden="true">→</span>
+                  </button>
+                </article>
+              </div>
+            </section>
+            <section className="home-faq" aria-labelledby="home-faq-heading">
+              <div className="home-section-heading">
+                <p className="eyebrow">MODLINK FAQ</p>
+                <h2 id="home-faq-heading">Questions about Discord staff roles?</h2>
+              </div>
+              <div className="home-faq__list">
+                <details>
+                  <summary>What is ModLink?</summary>
+                  <p>ModLink is a hiring hub for Discord moderators and online community staff. Community teams can post openings, and applicants can find roles and submit their experience.</p>
+                </details>
+                <details>
+                  <summary>What kinds of community jobs can I find?</summary>
+                  <p>Listings are posted by community teams and can include Discord moderator, server staff, community support, and other community-management roles. Search open listings for the roles and communities that interest you.</p>
+                </details>
+                <details>
+                  <summary>How do I apply for a Discord moderator role?</summary>
+                  <p>Browse open opportunities, select a role to review its description, then sign in with Discord to submit your application and relevant experience.</p>
+                </details>
+                <details>
+                  <summary>How can my Discord server hire staff?</summary>
+                  <p>Sign in with Discord, choose “Post a role,” and publish an opening with your server name, role title, and description. You can review applications in your workspace.</p>
+                </details>
+              </div>
+            </section>
+            {isSupabaseConfigured && !loading && openJobs.length > 0 && (
+              <script type="application/ld+json">{JSON.stringify(homepageJobList)}</script>
             )}
           </>
         )}
