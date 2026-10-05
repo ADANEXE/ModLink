@@ -52,6 +52,7 @@ export default function AdminPanel({
   promotionActivity,
   applications,
   settings,
+  adCampaigns,
   onCloseListing,
   onDeleteListing,
   onWarn,
@@ -62,6 +63,8 @@ export default function AdminPanel({
   onResolveReport,
   onSetPrManager,
   onSaveSetting,
+  onSaveAdCampaign,
+  onDeleteAdCampaign,
   onBroadcast,
 }) {
   const [announcement, setAnnouncement] = useState(settings.announcement || '');
@@ -81,14 +84,8 @@ export default function AdminPanel({
   const [prManagerSearch, setPrManagerSearch] = useState('');
   const [auditSearch, setAuditSearch] = useState('');
   const [auditType, setAuditType] = useState('all');
-  const [adSlot, setAdSlot] = useState({
-    enabled: false,
-    sponsor: '',
-    title: '',
-    description: '',
-    url: '',
-    ...(settings.ad_slot || {}),
-  });
+  const [campaignDraft, setCampaignDraft] = useState(null);
+  const [editingCampaignId, setEditingCampaignId] = useState(null);
   const rank = currentProfile?.admin_level ?? 0;
   const canAssign = (member) => member.id !== currentProfile?.id
     && (rank === 6 ? member.admin_level <= 5 : member.admin_level <= 3);
@@ -152,21 +149,44 @@ export default function AdminPanel({
     setAnnouncement(settings.announcement || '');
   }, [settings.announcement]);
 
-  useEffect(() => {
-    setAdSlot({
-      enabled: false,
-      sponsor: '',
+  function startCampaignDraft(campaign = null) {
+    setEditingCampaignId(campaign?.id || null);
+    setCampaignDraft(campaign ? {
+      advertiser_name: campaign.advertiser_name,
+      title: campaign.title,
+      description: campaign.description || '',
+      destination_url: campaign.destination_url,
+      media_type: campaign.media_type,
+      media_url: campaign.media_url || '',
+      placements: campaign.placements || ['homepage'],
+      is_active: campaign.is_active,
+    } : {
+      advertiser_name: '',
       title: '',
       description: '',
-      url: '',
-      ...(settings.ad_slot || {}),
+      destination_url: '',
+      media_type: 'none',
+      media_url: '',
+      placements: ['homepage'],
+      is_active: false,
     });
-  }, [settings.ad_slot]);
+  }
 
-  async function saveAdSlot(event) {
+  async function saveCampaign(event) {
     event.preventDefault();
     setSaving(true);
-    await onSaveSetting('ad_slot', adSlot);
+    const saved = await onSaveAdCampaign(editingCampaignId, campaignDraft);
+    setSaving(false);
+    if (saved) {
+      setCampaignDraft(null);
+      setEditingCampaignId(null);
+    }
+  }
+
+  async function deleteCampaign(campaign) {
+    if (!window.confirm(`Delete the ad campaign "${campaign.title}"? This cannot be undone.`)) return;
+    setSaving(true);
+    await onDeleteAdCampaign(campaign.id);
     setSaving(false);
   }
 
@@ -564,7 +584,7 @@ export default function AdminPanel({
         </div>
       </PermissionSection>
 
-      <PermissionSection id="admin-site-settings" minLevel={6} profile={currentProfile} title="Site controls & advertising" description="Owner-only settings. Update the public announcement, maintenance mode, or homepage sponsor placement.">
+      <PermissionSection id="admin-site-settings" minLevel={6} profile={currentProfile} title="Site controls & advertising" description="Owner-only settings. Manage site availability, announcements, and approved advertising campaigns.">
         <div className="panel maintenance-setting">
           <div>
             <strong>Maintenance mode</strong>
@@ -586,18 +606,93 @@ export default function AdminPanel({
           </label>
           <button className="button button--primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button>
         </form>
-        <form className="panel form-panel ad-manager-form" onSubmit={saveAdSlot}>
+        <section className="ad-campaign-manager" aria-labelledby="ad-campaign-heading">
           <div className="profile-section-heading">
-            <div><p className="eyebrow">SPONSORED PLACEMENT</p><h3>Homepage ad slot</h3></div>
-            <label className="ad-enabled-toggle"><input type="checkbox" checked={adSlot.enabled} onChange={(event) => setAdSlot({ ...adSlot, enabled: event.target.checked })} /> Publish</label>
+            <div><p className="eyebrow">SPONSORED PLACEMENTS</p><h3 id="ad-campaign-heading">Ad campaigns</h3></div>
+            <button className="button button--outline" type="button" onClick={() => startCampaignDraft()} disabled={saving}>Create campaign</button>
           </div>
-          <p className="admin-subsection__description">Manage one clearly labelled sponsor placement on the public opportunities page. The placement uses the existing settings row and does not collect impression or click data.</p>
-          <label className="form-field"><span>Sponsor name</span><input maxLength={60} value={adSlot.sponsor || ''} onChange={(event) => setAdSlot({ ...adSlot, sponsor: event.target.value })} placeholder="Sponsor or partner" /></label>
-          <label className="form-field"><span>Headline</span><input required={adSlot.enabled} maxLength={100} value={adSlot.title || ''} onChange={(event) => setAdSlot({ ...adSlot, title: event.target.value })} placeholder="A short, clear sponsor message" /></label>
-          <label className="form-field"><span>Description</span><textarea rows={3} maxLength={300} value={adSlot.description || ''} onChange={(event) => setAdSlot({ ...adSlot, description: event.target.value })} placeholder="What should visitors know about this partner?" /></label>
-          <label className="form-field"><span>Destination URL (HTTPS)</span><input type="url" required={adSlot.enabled} maxLength={500} pattern="https://.+" value={adSlot.url || ''} onChange={(event) => setAdSlot({ ...adSlot, url: event.target.value })} placeholder="https://example.com" /></label>
-          <button className="button button--primary" type="submit" disabled={saving}>{saving ? 'Saving ad slot…' : 'Save ad placement'}</button>
-        </form>
+          <p className="admin-subsection__description">PR Managers review advertiser inquiries; only the Owner can approve, publish, pause, edit, or delete campaigns. Active campaigns can run together in either or both placements.</p>
+          {campaignDraft && (
+            <form className="panel form-panel ad-manager-form" onSubmit={saveCampaign}>
+              <div className="profile-section-heading">
+                <div><p className="eyebrow">OWNER APPROVAL</p><h4>{editingCampaignId ? 'Edit campaign' : 'New campaign'}</h4></div>
+                <label className="ad-enabled-toggle">
+                  <input type="checkbox" checked={campaignDraft.is_active} onChange={(event) => setCampaignDraft({ ...campaignDraft, is_active: event.target.checked })} />
+                  {campaignDraft.is_active ? 'Published' : 'Draft'}
+                </label>
+              </div>
+              <label className="form-field"><span>Advertiser name</span><input required minLength={2} maxLength={80} value={campaignDraft.advertiser_name} onChange={(event) => setCampaignDraft({ ...campaignDraft, advertiser_name: event.target.value })} placeholder="Sponsor or partner" /></label>
+              <label className="form-field"><span>Headline</span><input required minLength={3} maxLength={100} value={campaignDraft.title} onChange={(event) => setCampaignDraft({ ...campaignDraft, title: event.target.value })} placeholder="A short, clear sponsor message" /></label>
+              <label className="form-field"><span>Description</span><textarea rows={3} maxLength={300} value={campaignDraft.description} onChange={(event) => setCampaignDraft({ ...campaignDraft, description: event.target.value })} placeholder="What should visitors know about this partner?" /></label>
+              <label className="form-field"><span>Destination URL (HTTPS)</span><input type="url" required maxLength={500} pattern="https://.+" value={campaignDraft.destination_url} onChange={(event) => setCampaignDraft({ ...campaignDraft, destination_url: event.target.value })} placeholder="https://example.com" /></label>
+              <label className="form-field">
+                <span>Creative format</span>
+                <select value={campaignDraft.media_type} onChange={(event) => setCampaignDraft({ ...campaignDraft, media_type: event.target.value, media_url: '' })}>
+                  <option value="none">Text only</option>
+                  <option value="image">Image / thumbnail</option>
+                  <option value="video">Direct video file</option>
+                </select>
+              </label>
+              {campaignDraft.media_type !== 'none' && (
+                <label className="form-field">
+                  <span>{campaignDraft.media_type === 'video' ? 'Video URL (HTTPS MP4, WebM, or Ogg)' : 'Image URL (HTTPS)'}</span>
+                  <input
+                    type="url"
+                    required
+                    maxLength={1000}
+                    pattern={campaignDraft.media_type === 'video' ? 'https://.+\\.(mp4|webm|ogg)(\\?.*)?' : 'https://.+'}
+                    value={campaignDraft.media_url}
+                    onChange={(event) => setCampaignDraft({ ...campaignDraft, media_url: event.target.value })}
+                    placeholder={campaignDraft.media_type === 'video' ? 'https://cdn.example.com/campaign.mp4' : 'https://cdn.example.com/thumbnail.jpg'}
+                  />
+                </label>
+              )}
+              <fieldset className="ad-placement-options">
+                <legend>Placements</legend>
+                {[
+                  ['homepage', 'Homepage sponsor area'],
+                  ['listing_feed', 'Between open listings'],
+                ].map(([placement, label]) => (
+                  <label key={placement}>
+                    <input
+                      type="checkbox"
+                      checked={campaignDraft.placements.includes(placement)}
+                      onChange={(event) => setCampaignDraft({
+                        ...campaignDraft,
+                        placements: event.target.checked
+                          ? [...campaignDraft.placements, placement]
+                          : campaignDraft.placements.filter((item) => item !== placement),
+                      })}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </fieldset>
+              <div className="campaign-form-actions">
+                <button className="button button--primary" type="submit" disabled={saving || campaignDraft.placements.length === 0}>
+                  {saving ? 'Saving…' : campaignDraft.is_active ? 'Save & publish campaign' : 'Save draft'}
+                </button>
+                <button className="button button--outline" type="button" onClick={() => { setCampaignDraft(null); setEditingCampaignId(null); }} disabled={saving}>Cancel</button>
+              </div>
+            </form>
+          )}
+          <div className="ad-campaign-list">
+            {adCampaigns.map((campaign) => (
+              <article className="panel ad-campaign-row" key={campaign.id}>
+                <div className="ad-campaign-row__content">
+                  <span className={`state-pill state-pill--${campaign.is_active ? 'open' : 'pending'}`}>{campaign.is_active ? 'Published' : 'Draft / paused'}</span>
+                  <h4>{campaign.title}</h4>
+                  <p>{campaign.advertiser_name} · {campaign.media_type} · {campaign.placements.map((placement) => placement === 'listing_feed' ? 'between listings' : 'homepage').join(', ')}</p>
+                </div>
+                <div className="ad-campaign-row__actions">
+                  <button className="button button--outline" type="button" onClick={() => startCampaignDraft(campaign)} disabled={saving}>Edit</button>
+                  <button className="button button--danger" type="button" onClick={() => deleteCampaign(campaign)} disabled={saving}>Delete</button>
+                </div>
+              </article>
+            ))}
+            {!adCampaigns.length && <div className="empty-state empty-state--compact"><p>No campaigns yet. Create one after reviewing an advertiser inquiry.</p></div>}
+          </div>
+        </section>
       </PermissionSection>
 
       <PermissionSection id="admin-site-metrics" minLevel={6} profile={currentProfile} title="Website metrics" description="Operational snapshot calculated from data already loaded for the staff workspace. Counts are not a privacy-safe unique visitor metric and no analytics events are written.">

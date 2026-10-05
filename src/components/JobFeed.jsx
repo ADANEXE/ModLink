@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
+import SponsoredCampaign from './SponsoredCampaign.jsx';
 
-export default function JobFeed({ jobs, focusListingId, onClearFocus, loading, user, profile, onApply, onReport, onSignIn }) {
+export default function JobFeed({ jobs, ads = [], focusListingId, onClearFocus, loading, user, profile, onApply, onReport, onSignIn }) {
   const [search, setSearch] = useState('');
   const [featuredOnly, setFeaturedOnly] = useState(false);
   const [selectedJob, setSelectedJob] = useState(null);
@@ -27,6 +28,49 @@ export default function JobFeed({ jobs, focusListingId, onClearFocus, loading, u
       return job.status === 'open' && matchesSearch && (!featuredOnly || job.is_featured);
     });
   }, [jobs, search, featuredOnly]);
+  const listingAds = ads.filter((campaign) => campaign.placements?.includes('listing_feed'));
+  const listingItems = [];
+  let nextAdIndex = 0;
+
+  function renderJobCard(job) {
+    return (
+      <article className="job-card" key={`job-${job.id}`}>
+        <div className="job-card__top">
+          <span className="server-avatar server-avatar--violet" aria-hidden="true">
+            {job.server_name.slice(0, 2).toUpperCase()}
+          </span>
+          {job.is_featured
+            ? <span className="featured-label"><span aria-hidden="true">✦</span> Featured</span>
+            : <span className="job-status">Open role</span>}
+        </div>
+        <p className="job-card__server">{job.server_name}</p>
+        <h3>{job.role_title}</h3>
+        <p className="job-card__detail job-card__description">{job.description || 'Join this community and help make it a welcoming place.'}</p>
+        <div className="job-card__actions">
+          <button className="job-card__action" type="button" onClick={() => { setDialogMode('apply'); setSelectedJob(job); }}>
+            View role & apply <span aria-hidden="true">→</span>
+          </button>
+          {user && (
+            <button className="report-link" type="button" onClick={() => { setDialogMode('report'); setSelectedJob(job); }}>
+              Report listing
+            </button>
+          )}
+        </div>
+      </article>
+    );
+  }
+
+  visibleJobs.forEach((job, index) => {
+    listingItems.push(renderJobCard(job));
+    if ((index + 1) % 3 === 0 && listingAds[nextAdIndex]) {
+      const campaign = listingAds[nextAdIndex];
+      listingItems.push(<SponsoredCampaign campaign={campaign} key={`ad-${campaign.id}`} />);
+      nextAdIndex += 1;
+    }
+  });
+  listingAds.slice(nextAdIndex).forEach((campaign) => {
+    listingItems.push(<SponsoredCampaign campaign={campaign} key={`ad-${campaign.id}`} />);
+  });
 
   async function submitApplication(event) {
     event.preventDefault();
@@ -75,37 +119,18 @@ export default function JobFeed({ jobs, focusListingId, onClearFocus, loading, u
         <div className="empty-state"><span className="loading-spinner" />Loading opportunities</div>
       ) : visibleJobs.length ? (
         <div className="job-grid">
-          {visibleJobs.map((job) => (
-            <article className="job-card" key={job.id}>
-              <div className="job-card__top">
-                <span className="server-avatar server-avatar--violet" aria-hidden="true">
-                  {job.server_name.slice(0, 2).toUpperCase()}
-                </span>
-                {job.is_featured
-                  ? <span className="featured-label"><span aria-hidden="true">✦</span> Featured</span>
-                  : <span className="job-status">Open role</span>}
-              </div>
-              <p className="job-card__server">{job.server_name}</p>
-              <h3>{job.role_title}</h3>
-              <p className="job-card__detail job-card__description">{job.description || 'Join this community and help make it a welcoming place.'}</p>
-              <div className="job-card__actions">
-                <button className="job-card__action" type="button" onClick={() => { setDialogMode('apply'); setSelectedJob(job); }}>
-                  View role & apply <span aria-hidden="true">→</span>
-                </button>
-                {user && (
-                  <button className="report-link" type="button" onClick={() => { setDialogMode('report'); setSelectedJob(job); }}>
-                    Report listing
-                  </button>
-                )}
-              </div>
-            </article>
-          ))}
+          {listingItems}
         </div>
       ) : (
         <div className="empty-state">
           <span className="empty-state__icon" aria-hidden="true">✦</span>
           <h3>{jobs.length ? 'No matching roles' : 'Your next community starts here'}</h3>
           <p>{jobs.length ? 'Try changing your search or featured filter.' : 'There are no open listings yet. Sign in to post an opportunity or check back soon.'}</p>
+        </div>
+      )}
+      {!loading && !visibleJobs.length && listingAds.length > 0 && (
+        <div className="job-grid job-grid--sponsored" aria-label="Sponsored campaigns between job listings">
+          {listingAds.map((campaign) => <SponsoredCampaign campaign={campaign} key={campaign.id} />)}
         </div>
       )}
 

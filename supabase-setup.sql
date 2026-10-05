@@ -125,6 +125,59 @@ create table if not exists public.pr_inquiries (
   resolved_at timestamptz
 );
 
+create table if not exists public.ad_campaigns (
+  id uuid primary key default gen_random_uuid(),
+  advertiser_name text not null check (char_length(advertiser_name) between 2 and 80),
+  title text not null check (char_length(title) between 3 and 100),
+  description text not null default '' check (char_length(description) <= 300),
+  destination_url text not null check (char_length(destination_url) <= 500 and destination_url ~ '^https://[^[:space:]]+$'),
+  media_type text not null default 'none' check (media_type in ('none', 'image', 'video')),
+  media_url text check (media_url is null or (char_length(media_url) <= 1000 and media_url ~ '^https://[^[:space:]]+$')),
+  placements text[] not null default array['homepage']::text[]
+    check (cardinality(placements) between 1 and 2 and placements <@ array['homepage', 'listing_feed']::text[]),
+  is_active boolean not null default false,
+  created_by uuid references public.profiles (id) on delete set null,
+  approved_by uuid references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (
+    (media_type = 'none' and media_url is null)
+    or (media_type in ('image', 'video') and media_url is not null)
+  ),
+  check (
+    media_type <> 'video'
+    or media_url ~* '^https://[^[:space:]]+\.(mp4|webm|ogg)(\?[^[:space:]]*)?$'
+  )
+);
+
+insert into public.ad_campaigns (
+  advertiser_name,
+  title,
+  description,
+  destination_url,
+  placements,
+  is_active
+)
+select
+  coalesce(nullif(trim(legacy.value ->> 'sponsor'), ''), 'Community partner'),
+  legacy.value ->> 'title',
+  coalesce(legacy.value ->> 'description', ''),
+  legacy.value ->> 'url',
+  array['homepage']::text[],
+  coalesce((legacy.value ->> 'enabled')::boolean, false)
+from public.site_settings as legacy
+where legacy.key = 'ad_slot'
+  and jsonb_typeof(legacy.value) = 'object'
+  and char_length(trim(coalesce(legacy.value ->> 'title', ''))) between 3 and 100
+  and coalesce(legacy.value ->> 'url', '') ~ '^https://[^[:space:]]+$'
+  and not exists (
+    select 1 from public.ad_campaigns
+    where destination_url = legacy.value ->> 'url'
+      and title = legacy.value ->> 'title'
+  );
+
+delete from public.site_settings where key = 'ad_slot';
+
 create table if not exists public.chat_conversations (
   id uuid primary key default gen_random_uuid(),
   application_id uuid not null unique references public.applications (id) on delete cascade,
@@ -175,6 +228,9 @@ create index if not exists pr_inquiries_status_created_at_idx
   on public.pr_inquiries (status, created_at desc);
 create index if not exists pr_inquiries_requester_created_at_idx
   on public.pr_inquiries (requester_id, created_at desc);
+create index if not exists ad_campaigns_active_created_idx
+  on public.ad_campaigns (created_at desc)
+  where is_active;
 create index if not exists staff_action_log_created_at_idx
   on public.staff_action_log (created_at desc);
 create index if not exists chat_messages_conversation_expiry_idx
@@ -1270,7 +1326,7 @@ begin
   if public.current_admin_level() < 6 then
     raise exception 'Owner access required';
   end if;
-  if setting_key not in ('announcement', 'maintenance_mode', 'ad_slot') then
+  if setting_key not in ('announcement', 'maintenance_mode') then
     raise exception 'Unknown site setting';
   end if;
   if setting_key = 'maintenance_mode' and jsonb_typeof(setting_value) is distinct from 'boolean' then
@@ -1279,27 +1335,6 @@ begin
   if setting_key = 'announcement'
     and (jsonb_typeof(setting_value) is distinct from 'string' or char_length(setting_value #>> '{}') > 1000) then
     raise exception 'Announcement must be text no longer than 1000 characters';
-  end if;
-  if setting_key = 'ad_slot' then
-    if jsonb_typeof(setting_value) is distinct from 'object'
-      or jsonb_typeof(setting_value -> 'enabled') is distinct from 'boolean'
-      or (setting_value ? 'sponsor' and jsonb_typeof(setting_value -> 'sponsor') is distinct from 'string')
-      or (setting_value ? 'title' and jsonb_typeof(setting_value -> 'title') is distinct from 'string')
-      or (setting_value ? 'description' and jsonb_typeof(setting_value -> 'description') is distinct from 'string')
-      or (setting_value ? 'url' and jsonb_typeof(setting_value -> 'url') is distinct from 'string')
-      or char_length(coalesce(setting_value ->> 'sponsor', '')) > 60
-      or char_length(coalesce(setting_value ->> 'title', '')) > 100
-      or char_length(coalesce(setting_value ->> 'description', '')) > 300
-      or char_length(coalesce(setting_value ->> 'url', '')) > 500 then
-      raise exception 'Ad placement fields are invalid or too long';
-    end if;
-    if setting_value ->> 'enabled' = 'true'
-      and (
-        char_length(trim(coalesce(setting_value ->> 'title', ''))) < 3
-        or coalesce(setting_value ->> 'url', '') !~ '^https://[^[:space:]]+$'
-      ) then
-      raise exception 'Published ad placements require a headline and HTTPS destination';
-    end if;
   end if;
   select value into previous_value
   from public.site_settings
@@ -1322,6 +1357,138 @@ begin
 end;
 $$;
 
+create or replace function public.owner_save_ad_campaign(campaign_id uuid, campaign_value jsonb)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  campaign_placements text[];
+  saved_id uuid;
+  campaign_active boolean;
+begin
+  if public.current_admin_level() < 6 then
+    raise exception 'Owner access required';
+  end if;
+  if jsonb_typeof(campaign_value) is distinct from 'object'
+    or jsonb_typeof(campaign_value -> 'is_active') is distinct from 'boolean'
+    or jsonb_typeof(campaign_value -> 'placements') is distinct from 'array' then
+    raise exception 'Campaign fields are invalid';
+  end if;
+
+  campaign_placements := array(
+    select distinct placement
+    from jsonb_array_elements_text(campaign_value -> 'placements') as item(placement)
+    order by placement
+  );
+  campaign_active := (campaign_value ->> 'is_active')::boolean;
+  if char_length(trim(coalesce(campaign_value ->> 'advertiser_name', ''))) not between 2 and 80
+    or char_length(trim(coalesce(campaign_value ->> 'title', ''))) not between 3 and 100
+    or char_length(coalesce(campaign_value ->> 'description', '')) > 300
+    or char_length(coalesce(campaign_value ->> 'destination_url', '')) > 500
+    or coalesce(campaign_value ->> 'destination_url', '') !~ '^https://[^[:space:]]+$'
+    or cardinality(campaign_placements) not between 1 and 2
+    or not (campaign_placements <@ array['homepage', 'listing_feed']::text[])
+    or coalesce(campaign_value ->> 'media_type', '') not in ('none', 'image', 'video') then
+    raise exception 'Campaign fields are invalid or outside the allowed limits';
+  end if;
+
+  if campaign_value ->> 'media_type' = 'none' then
+    if nullif(trim(coalesce(campaign_value ->> 'media_url', '')), '') is not null then
+      raise exception 'Text-only campaigns cannot include a media URL';
+    end if;
+  elsif char_length(coalesce(campaign_value ->> 'media_url', '')) > 1000
+    or coalesce(campaign_value ->> 'media_url', '') !~ '^https://[^[:space:]]+$' then
+    raise exception 'Campaign media requires a valid HTTPS URL';
+  end if;
+
+  if campaign_value ->> 'media_type' = 'video'
+    and coalesce(campaign_value ->> 'media_url', '') !~* '^https://[^[:space:]]+\.(mp4|webm|ogg)(\?[^[:space:]]*)?$' then
+    raise exception 'Video media must be a direct MP4, WebM, or Ogg URL';
+  end if;
+
+  if campaign_id is null then
+    insert into public.ad_campaigns (
+      advertiser_name, title, description, destination_url, media_type, media_url,
+      placements, is_active, created_by, approved_by
+    )
+    values (
+      trim(campaign_value ->> 'advertiser_name'),
+      trim(campaign_value ->> 'title'),
+      coalesce(campaign_value ->> 'description', ''),
+      campaign_value ->> 'destination_url',
+      campaign_value ->> 'media_type',
+      nullif(trim(coalesce(campaign_value ->> 'media_url', '')), ''),
+      campaign_placements,
+      campaign_active,
+      auth.uid(),
+      case when campaign_active then auth.uid() else null end
+    )
+    returning id into saved_id;
+  else
+    update public.ad_campaigns
+    set advertiser_name = trim(campaign_value ->> 'advertiser_name'),
+        title = trim(campaign_value ->> 'title'),
+        description = coalesce(campaign_value ->> 'description', ''),
+        destination_url = campaign_value ->> 'destination_url',
+        media_type = campaign_value ->> 'media_type',
+        media_url = nullif(trim(coalesce(campaign_value ->> 'media_url', '')), ''),
+        placements = campaign_placements,
+        is_active = campaign_active,
+        approved_by = case when campaign_active then auth.uid() else approved_by end,
+        updated_at = now()
+    where id = campaign_id
+    returning id into saved_id;
+    if saved_id is null then
+      raise exception 'Ad campaign not found';
+    end if;
+  end if;
+
+  perform public.record_staff_action(
+    'ad_campaign_saved',
+    null,
+    null,
+    null,
+    jsonb_build_object(
+      'campaign_id', saved_id,
+      'advertiser_name', trim(campaign_value ->> 'advertiser_name'),
+      'is_active', campaign_active,
+      'placements', campaign_placements
+    )
+  );
+  return saved_id;
+end;
+$$;
+
+create or replace function public.owner_delete_ad_campaign(campaign_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  deleted_title text;
+begin
+  if public.current_admin_level() < 6 then
+    raise exception 'Owner access required';
+  end if;
+  delete from public.ad_campaigns
+  where id = campaign_id
+  returning title into deleted_title;
+  if deleted_title is null then
+    raise exception 'Ad campaign not found';
+  end if;
+  perform public.record_staff_action(
+    'ad_campaign_deleted',
+    null,
+    null,
+    null,
+    jsonb_build_object('campaign_id', campaign_id, 'title', deleted_title)
+  );
+end;
+$$;
+
 revoke all on function public.admin_set_member_level(uuid, integer) from public;
 revoke all on function public.owner_set_pr_manager(uuid, boolean) from public;
 revoke all on function public.submit_pr_inquiry(text, text, text) from public;
@@ -1334,6 +1501,8 @@ revoke all on function public.moderator_issue_warning(uuid, text) from public;
 revoke all on function public.senior_mod_suspend_profile(uuid, integer, text) from public;
 revoke all on function public.moderator_resolve_report(uuid, text, text) from public;
 revoke all on function public.owner_set_site_setting(text, jsonb) from public;
+revoke all on function public.owner_save_ad_campaign(uuid, jsonb) from public;
+revoke all on function public.owner_delete_ad_campaign(uuid) from public;
 revoke all on function public.admin_broadcast_notification(text, text) from public;
 revoke all on function public.listing_owner_start_chat(uuid) from public;
 revoke all on function public.send_chat_message(uuid, text) from public;
@@ -1351,6 +1520,8 @@ grant execute on function public.moderator_issue_warning(uuid, text) to authenti
 grant execute on function public.senior_mod_suspend_profile(uuid, integer, text) to authenticated;
 grant execute on function public.moderator_resolve_report(uuid, text, text) to authenticated;
 grant execute on function public.owner_set_site_setting(text, jsonb) to authenticated;
+grant execute on function public.owner_save_ad_campaign(uuid, jsonb) to authenticated;
+grant execute on function public.owner_delete_ad_campaign(uuid) to authenticated;
 grant execute on function public.admin_broadcast_notification(text, text) to authenticated;
 grant execute on function public.listing_owner_start_chat(uuid) to authenticated;
 grant execute on function public.send_chat_message(uuid, text) to authenticated;
@@ -1367,6 +1538,7 @@ alter table public.chat_conversations enable row level security;
 alter table public.chat_messages enable row level security;
 alter table public.staff_action_log enable row level security;
 alter table public.pr_inquiries enable row level security;
+alter table public.ad_campaigns enable row level security;
 
 grant select on public.profiles to authenticated;
 grant select on public.job_listings to anon, authenticated;
@@ -1380,6 +1552,7 @@ revoke all on public.chat_conversations from anon, authenticated;
 revoke all on public.chat_messages from anon, authenticated;
 revoke all on public.staff_action_log from anon, authenticated;
 revoke all on public.pr_inquiries from anon, authenticated;
+revoke all on public.ad_campaigns from anon, authenticated;
 grant select, insert on public.moderation_reports to authenticated;
 grant select on public.moderation_warnings to authenticated;
 grant select on public.site_settings to anon, authenticated;
@@ -1388,6 +1561,7 @@ grant select on public.chat_conversations to authenticated;
 grant select on public.chat_messages to authenticated;
 grant select on public.staff_action_log to authenticated;
 grant select on public.pr_inquiries to authenticated;
+grant select on public.ad_campaigns to anon, authenticated;
 
 -- Profile role and verification fields are managed by trusted server-side tooling.
 revoke update on public.profiles from authenticated;
@@ -1501,7 +1675,17 @@ create policy "Owners can read site settings"
 drop policy if exists "Community can read the site announcement" on public.site_settings;
 create policy "Community can read the site announcement"
   on public.site_settings for select to anon, authenticated
-  using (key in ('announcement', 'maintenance_mode', 'ad_slot'));
+  using (key in ('announcement', 'maintenance_mode'));
+
+drop policy if exists "Community can read active ad campaigns" on public.ad_campaigns;
+create policy "Community can read active ad campaigns"
+  on public.ad_campaigns for select to anon, authenticated
+  using (is_active);
+
+drop policy if exists "Owners can read all ad campaigns" on public.ad_campaigns;
+create policy "Owners can read all ad campaigns"
+  on public.ad_campaigns for select to authenticated
+  using ((select public.current_admin_level()) >= 6);
 
 drop policy if exists "Users can read their notifications" on public.notifications;
 create policy "Users can read their notifications"

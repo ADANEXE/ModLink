@@ -8,6 +8,7 @@ import ChatPanel from './components/ChatPanel.jsx';
 import NotificationsPanel from './components/NotificationsPanel.jsx';
 import ContactPanel from './components/ContactPanel.jsx';
 import ProfilePanel from './components/ProfilePanel.jsx';
+import SponsoredCampaign from './components/SponsoredCampaign.jsx';
 import { EmployerPanel } from './components/WorkspacePanels.jsx';
 import { getPromotionReviewCandidates } from './lib/staffPromotion.js';
 import { isSupabaseConfigured, supabaseClient } from './lib/supabaseClient.js';
@@ -25,7 +26,8 @@ export default function App() {
   const [warnings, setWarnings] = useState([]);
   const [settings, setSettings] = useState({});
   const [announcement, setAnnouncement] = useState('');
-  const [publicAd, setPublicAd] = useState(null);
+  const [adCampaigns, setAdCampaigns] = useState([]);
+  const [adminAdCampaigns, setAdminAdCampaigns] = useState([]);
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [conversations, setConversations] = useState([]);
@@ -112,15 +114,22 @@ export default function App() {
     const { data: publicSettings, error: announcementError } = await supabaseClient
       .from('site_settings')
       .select('key, value')
-      .in('key', ['announcement', 'maintenance_mode', 'ad_slot']);
+      .in('key', ['announcement', 'maintenance_mode']);
     if (announcementError) setMessage(`Unable to load site announcement: ${announcementError.message}`);
     else {
       const publicSettingsByKey = Object.fromEntries((publicSettings || []).map((item) => [item.key, item.value]));
       setAnnouncement(typeof publicSettingsByKey.announcement === 'string' ? publicSettingsByKey.announcement : '');
       setMaintenanceMode(publicSettingsByKey.maintenance_mode === true);
-      const adSetting = publicSettingsByKey.ad_slot;
-      setPublicAd(adSetting && typeof adSetting === 'object' && adSetting.enabled === true ? adSetting : null);
     }
+    const { data: activeAdCampaigns, error: campaignsError } = await supabaseClient
+      .from('ad_campaigns')
+      .select('id, advertiser_name, title, description, destination_url, media_type, media_url, placements, is_active')
+      .eq('is_active', true)
+      .order('created_at', { ascending: false });
+    if (campaignsError) {
+      setMessage(`Unable to load advertising campaigns: ${campaignsError.message}`);
+      setAdCampaigns([]);
+    } else setAdCampaigns(activeAdCampaigns || []);
 
     if (session?.user) {
       const applicationsResult = results[1];
@@ -159,7 +168,7 @@ export default function App() {
       } else setPrInquiries(prInquiryData || []);
 
       if (!profileResult.error && (profileResult.data?.admin_level ?? 0) >= 5) {
-        const [profilesResult, reportsResult, settingsResult, staffActionsResult, promotionActivityResult] = await Promise.all([
+        const [profilesResult, reportsResult, settingsResult, staffActionsResult, promotionActivityResult, adCampaignsResult] = await Promise.all([
           supabaseClient.from('profiles')
             .select('id, discord_id, username, avatar_url, admin_level, is_verified_moderator, is_pr_manager, suspended_until, suspension_reason, is_suspended')
             .order('username'),
@@ -175,6 +184,9 @@ export default function App() {
             .order('created_at', { ascending: false })
             .limit(200),
           supabaseClient.rpc('admin_promotion_activity'),
+          (profileResult.data?.admin_level ?? 0) >= 6
+            ? supabaseClient.from('ad_campaigns').select('*').order('created_at', { ascending: false })
+            : Promise.resolve({ data: [], error: null }),
         ]);
         if (profilesResult.error) setMessage(`Unable to load member directory: ${profilesResult.error.message}`);
         else setProfiles(profilesResult.data || []);
@@ -182,6 +194,8 @@ export default function App() {
         else setReports(reportsResult.data || []);
         if (settingsResult.error) setMessage(`Unable to load site settings: ${settingsResult.error.message}`);
         else setSettings(Object.fromEntries((settingsResult.data || []).map((item) => [item.key, item.value])));
+        if (adCampaignsResult.error) setMessage(`Unable to load ad campaigns: ${adCampaignsResult.error.message}`);
+        else setAdminAdCampaigns(adCampaignsResult.data || []);
         if (staffActionsResult.error) setMessage(`Unable to load staff action history: ${staffActionsResult.error.message}`);
         else setStaffActions(staffActionsResult.data || []);
         if (promotionActivityResult.error) {
@@ -209,6 +223,7 @@ export default function App() {
           setWarnings([]);
         }
         setSettings({});
+        setAdminAdCampaigns([]);
         setStaffActions([]);
         setPromotionActivity([]);
       }
@@ -221,10 +236,10 @@ export default function App() {
       setPromotionActivity([]);
       setWarnings([]);
       setSettings({});
+      setAdminAdCampaigns([]);
       setNotifications([]);
       setConversations([]);
       setPrInquiries([]);
-      setAnnouncement('');
     }
     setLoading(false);
   }, [session]);
@@ -519,6 +534,22 @@ export default function App() {
     return handleAdminAction('owner_set_site_setting', { setting_key: key, setting_value: value }, 'Site setting saved.');
   }
 
+  async function handleSaveAdCampaign(campaignId, campaignValue) {
+    return handleAdminAction(
+      'owner_save_ad_campaign',
+      { campaign_id: campaignId, campaign_value: campaignValue },
+      campaignValue.is_active ? 'Ad campaign published.' : 'Ad campaign saved as a draft.',
+    );
+  }
+
+  async function handleDeleteAdCampaign(campaignId) {
+    return handleAdminAction(
+      'owner_delete_ad_campaign',
+      { campaign_id: campaignId },
+      'Ad campaign deleted.',
+    );
+  }
+
   const adminLevel = profile?.admin_level ?? 0;
   const unreadCount = notifications.filter((notification) => !notification.read_at).length;
   const prInboxCount = prInquiries.filter((inquiry) => inquiry.status === 'pending' && inquiry.requester_id !== session?.user?.id).length;
@@ -529,10 +560,6 @@ export default function App() {
     application.job_listings?.owner_id === session?.user?.id,
   );
   const displayName = profile?.username || session?.user?.user_metadata?.full_name || 'Discord member';
-  const hasPublicAd = publicAd?.enabled
-    && publicAd.title
-    && /^https:\/\//i.test(publicAd.url || '');
-
   if (maintenanceMode && adminLevel < 6) {
     return (
       <div className="maintenance-page">
@@ -606,23 +633,20 @@ export default function App() {
               <div><strong>Build</strong><span>healthier communities</span></div>
             </div>
             {announcement && <p className="site-announcement"><span aria-hidden="true">✦</span>{announcement}</p>}
-            {hasPublicAd && (
-              <a className="sponsored-placement" href={publicAd.url} target="_blank" rel="sponsored noopener noreferrer">
-                <span className="sponsored-placement__label">SPONSORED · {publicAd.sponsor || 'COMMUNITY PARTNER'}</span>
-                <span className="sponsored-placement__title">{publicAd.title}</span>
-                {publicAd.description && <span className="sponsored-placement__copy">{publicAd.description}</span>}
-                <span className="sponsored-placement__cta">Learn more ↗</span>
-              </a>
+            {adCampaigns.some((campaign) => campaign.placements?.includes('homepage')) && (
+              <div className="sponsored-grid" aria-label="Sponsored campaigns">
+                {adCampaigns
+                  .filter((campaign) => campaign.placements?.includes('homepage'))
+                  .map((campaign) => <SponsoredCampaign campaign={campaign} key={campaign.id} />)}
+              </div>
             )}
-            {!hasPublicAd && (
-              <section className="sponsored-placement sponsored-placement--empty" aria-label="Advertising opportunity">
-                <span className="sponsored-placement__label">ADVERTISING OPPORTUNITY</span>
-                <span className="sponsored-placement__title">Reach Discord community teams</span>
-                <span className="sponsored-placement__copy">Ask our PR team about sponsor placements on ModLink.</span>
-                <button className="sponsored-placement__cta button" type="button" onClick={() => { setContactTopic('advertising'); setActiveView('pr-contact'); }}>Ask about advertising ↗</button>
-              </section>
-            )}
-            {isSupabaseConfigured && <JobFeed jobs={jobs} focusListingId={focusListingId} onClearFocus={() => setFocusListingId(null)} loading={loading} user={session?.user} profile={profile} onApply={handleApply} onReport={handleReport} onSignIn={handleSignIn} />}
+            <section className="sponsored-placement sponsored-placement--empty" aria-label="Advertising opportunity">
+              <span className="sponsored-placement__label">ADVERTISING OPPORTUNITY</span>
+              <span className="sponsored-placement__title">Reach Discord community teams</span>
+              <span className="sponsored-placement__copy">Ask the PR team about image, video, and text placements on ModLink.</span>
+              <button className="sponsored-placement__cta button" type="button" onClick={() => { setContactTopic('advertising'); setActiveView('pr-contact'); }}>Ask about advertising ↗</button>
+            </section>
+            {isSupabaseConfigured && <JobFeed jobs={jobs} ads={adCampaigns} focusListingId={focusListingId} onClearFocus={() => setFocusListingId(null)} loading={loading} user={session?.user} profile={profile} onApply={handleApply} onReport={handleReport} onSignIn={handleSignIn} />}
             {!isSupabaseConfigured && (
               <p className="config-notice" role="status">
                 Supabase isn’t configured yet. Add <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> to <code>.env</code>, then restart Vite to enable accounts and live listings.
@@ -716,6 +740,7 @@ export default function App() {
               onSetPrManager={(targetId, enabled) => handleAdminAction('owner_set_pr_manager', { target_user_id: targetId, enabled }, enabled ? 'PR Manager access granted.' : 'PR Manager access removed.')}
               applications={applications}
               settings={settings}
+              adCampaigns={adminAdCampaigns}
               onCloseListing={(jobId) => handleAdminAction('moderator_close_listing', { target_listing_id: jobId }, 'Listing closed.')}
               onDeleteListing={(jobId) => handleAdminAction('moderator_delete_listing', { target_listing_id: jobId }, 'Listing permanently deleted.')}
               onWarn={(targetId, reason) => handleAdminAction('moderator_issue_warning', { target_user_id: targetId, warning_reason: reason }, 'Warning issued.')}
@@ -725,6 +750,8 @@ export default function App() {
               onSetFeatured={(jobId, featured) => handleAdminAction('admin_set_listing_featured', { target_listing_id: jobId, featured }, featured ? 'Listing featured.' : 'Featured status removed.')}
               onResolveReport={(reportId, status, reply) => handleAdminAction('moderator_resolve_report', { target_report_id: reportId, new_status: status, staff_reply: reply }, `Report ${status} and response sent.`)}
               onSaveSetting={handleSaveSetting}
+              onSaveAdCampaign={handleSaveAdCampaign}
+              onDeleteAdCampaign={handleDeleteAdCampaign}
               onBroadcast={handleBroadcast}
             />
           </AdminGuard>

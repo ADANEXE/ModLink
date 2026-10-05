@@ -517,6 +517,27 @@ button { color: inherit; }
 .sponsored-placement--empty { border-style: dashed; background: linear-gradient(110deg, rgba(88, 101, 242, .07), rgba(20, 30, 52, .48)); }
 .sponsored-placement__cta.button { width: fit-content; border: 0; padding: 4px 0; color: #b9beff; background: transparent; cursor: pointer; }
 .sponsored-placement__cta.button:hover { color: #e0e2ff; }
+.sponsored-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 22px; }
+.sponsored-grid .sponsored-placement { margin-top: 0; }
+.job-grid .sponsored-placement { margin-top: 0; }
+.sponsored-campaign { min-width: 0; }
+.sponsored-campaign__media { width: 100%; max-height: 300px; aspect-ratio: 16 / 9; border-radius: 9px; background: rgba(0, 0, 0, .22); object-fit: cover; }
+.sponsored-campaign video.sponsored-campaign__media { object-fit: contain; }
+.sponsored-campaign .sponsored-placement__title { margin: 0; }
+.sponsored-campaign .sponsored-placement__copy { margin: 0; }
+.ad-campaign-manager { margin-top: 20px; }
+.ad-campaign-manager .profile-section-heading h3 { margin: 0; color: #eef0f8; font: 600 18px 'Space Grotesk', sans-serif; }
+.ad-manager-form .profile-section-heading h4 { margin: 0; color: #eef0f8; font: 600 16px 'Space Grotesk', sans-serif; }
+.ad-placement-options { display: flex; flex-wrap: wrap; gap: 12px 20px; border: 1px solid var(--line); border-radius: 9px; padding: 13px; color: #c2cada; font-size: 11px; }
+.ad-placement-options legend { padding: 0 5px; color: #9da8bd; }
+.ad-placement-options label { display: inline-flex; align-items: center; gap: 7px; }
+.campaign-form-actions, .ad-campaign-row__actions { display: flex; flex-wrap: wrap; gap: 9px; }
+.ad-campaign-list { display: flex; flex-direction: column; gap: 9px; margin-top: 14px; }
+.ad-campaign-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px 17px; }
+.ad-campaign-row__content { min-width: 0; }
+.ad-campaign-row__content h4 { margin: 8px 0 4px; color: #e8eaf2; font: 600 14px 'Space Grotesk', sans-serif; }
+.ad-campaign-row__content p { margin: 0; color: #98a3bb; font-size: 10px; line-height: 1.6; }
+.ad-campaign-row__actions { flex-shrink: 0; }
 .maintenance-page { min-height: 100vh; display: flex; align-items: center; flex-direction: column; justify-content: center; padding: 32px 20px; background: radial-gradient(ellipse at 50% 42%, rgba(88, 101, 242, .13), transparent 48%), #0b1220; }
 .maintenance-page > .brand { position: absolute; top: 34px; left: max(32px, calc((100vw - 1160px) / 2)); }
 .maintenance-card { width: min(100%, 560px); border: 1px solid rgba(148, 163, 184, .16); border-radius: 20px; padding: 52px 42px; background: linear-gradient(145deg, rgba(20, 30, 52, .96), rgba(15, 23, 42, .92)); box-shadow: 0 24px 90px rgba(0, 0, 0, .25); text-align: center; }
@@ -571,6 +592,8 @@ button { color: inherit; }
   .maintenance-card { padding: 38px 24px; }
   .maintenance-page > .brand { top: 22px; left: 20px; }
   .maintenance-setting { align-items: flex-start; flex-direction: column; }
+  .sponsored-grid { grid-template-columns: 1fr; }
+  .ad-campaign-row { align-items: flex-start; flex-direction: column; }
   .chat-window__header { flex-wrap: wrap; }
 }
 

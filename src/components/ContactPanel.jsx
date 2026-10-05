@@ -74,6 +74,11 @@ export default function ContactPanel({
               {TOPICS.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}
             </select>
           </label>
+          {topic === 'advertising' && (
+            <p className="contact-form__privacy">
+              Include your advertiser name, campaign goal and audience, requested placement, final copy, HTTPS destination and media links, plus confirmation that you have rights to the creative. PR Managers review inquiries; the Owner makes the final campaign approval and publication decision.
+            </p>
+          )}
           <label className="form-field">
             <span>Subject</span>
             <input required minLength={3} maxLength={120} value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="What would you like to discuss?" />
