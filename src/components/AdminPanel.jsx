@@ -467,7 +467,7 @@ export default function AdminPanel({
         </div>
       </PermissionSection>
 
-      <PermissionSection minLevel={6} profile={currentProfile} title="PR Manager access" description="Assign the separate PR Manager role to members who should receive advertising, press, and partnership inquiries. This role does not grant moderation or staff-level permissions.">
+      <PermissionSection minLevel={6} profile={currentProfile} title="PR Manager access" description="Level 6 Owners can always access the PR inbox and reply, even without the PR Manager flag. Assign this separate role to other members who should help handle advertising, press, and partnership inquiries; it grants no moderation permissions. You may also toggle the flag on your own account to receive PR Manager notifications.">
         <label className="search-field admin-directory-search">
           <span className="sr-only">Search PR Manager accounts</span><span aria-hidden="true">⌕</span>
           <input value={prManagerSearch} onChange={(event) => setPrManagerSearch(event.target.value)} placeholder="Find an account by name or Discord ID" />
@@ -479,8 +479,8 @@ export default function AdminPanel({
                 <strong>{member.username || 'Discord member'}</strong>
                 <span>{member.discord_id ? `Discord ID ${member.discord_id}` : member.id}</span>
               </div>
-              <button className={`button ${member.is_pr_manager ? 'button--primary' : 'button--outline'}`} type="button" onClick={() => setPrManager(member)} disabled={saving || member.id === currentProfile?.id}>
-                {member.is_pr_manager ? 'Remove PR Manager' : 'Assign PR Manager'}
+              <button className={`button ${member.is_pr_manager ? 'button--primary' : 'button--outline'}`} type="button" onClick={() => setPrManager(member)} disabled={saving}>
+                {member.is_pr_manager ? 'Remove PR Manager' : member.id === currentProfile?.id ? 'Assign PR Manager to me' : 'Assign PR Manager'}
               </button>
             </article>
           ))}

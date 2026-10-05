@@ -75,7 +75,7 @@ export default function Header({
           {user && (
             <div className="workspace-menu">
               <button
-                className={`site-header__link workspace-menu__toggle${['profile', 'applications', 'notifications', 'messages', 'admin'].includes(activeView) ? ' is-active' : ''}`}
+                className={`site-header__link workspace-menu__toggle${['profile', 'applications', 'notifications', 'messages', 'admin', 'pr-contact'].includes(activeView) ? ' is-active' : ''}`}
                 type="button"
                 aria-expanded={workspaceOpen}
                 aria-controls="workspace-menu-items"

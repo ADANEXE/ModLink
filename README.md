@@ -33,7 +33,7 @@ The `Deploy frontend to GitHub Pages` workflow deploys the `main` branch to http
 - **Level 4 — Sr Mod:** temporarily suspend lower-ranked accounts from posting and applying (up to 30 days).
 - **Level 5 — Sr Admin:** verify moderators, feature listings, and manage staff through Level 3.
 - **Level 6 — Owner:** all staff controls, manage staff through Level 5, suspend accounts permanently or for up to a year, update site announcements/settings, and turn public maintenance mode on or off.
-- **PR Manager — separate assignment:** an Owner can assign this non-moderation role to any member. PR Managers can review and answer advertising, press, and partnership inquiries but receive no moderation permissions.
+- **PR Manager — separate assignment:** an Owner can assign this non-moderation role to any member (including their own account). PR Managers can review and answer advertising, press, and partnership inquiries but receive no moderation permissions. Level 6 Owners always have full PR inbox access whether or not they have this separate flag.
 
 Moderation RPCs enforce these levels in Postgres as well as in the UI. Report outcomes include a staff reply in the reporter's inbox; Senior Admins can broadcast a notice to all accounts. A private staff action history is visible only to Senior Admins and Owners and records the acting staff member's name, rank, target, and action for promotion reviews. The promotion panel flags active staff with at least five recorded casework actions in the rolling 30-day audit window for human review; this is an advisory activity threshold, not an automatic promotion or a measure of action quality. Senior staff should review the audit details and pending staff-conduct reports before using the staff access controls.
 
