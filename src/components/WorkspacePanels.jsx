@@ -9,11 +9,34 @@ function getSafeExternalUrl(value) {
   }
 }
 
-export function EmployerPanel({ user, profile, jobs, applications, conversations, onStartChat, onCreateJob, onUpdateJob, onUpdateApplication }) {
+const LISTING_CATEGORIES = [
+  ['moderation', 'Moderation & safety'],
+  ['community', 'Community management'],
+  ['support', 'Member support'],
+  ['events', 'Events & engagement'],
+  ['development', 'Development & bots'],
+  ['other', 'Other'],
+];
+
+export function EmployerPanel({ user, profile, jobs, applications, conversations, onStartChat, onCreateJob, onUpdateJob, onUpdateApplication, onRenewJob }) {
   const [showForm, setShowForm] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({ server_name: '', role_title: '', description: '' });
+  const [renewingId, setRenewingId] = useState(null);
+  const [form, setForm] = useState({
+    server_name: '',
+    role_title: '',
+    description: '',
+    category: 'moderation',
+    responsibilities: '',
+    requirements: '',
+    experience_level: 'any',
+    time_commitment: '',
+    location: 'Remote',
+    compensation_type: 'unspecified',
+    compensation_details: '',
+  });
   const ownedJobs = jobs.filter((job) => job.owner_id === user?.id);
+  const isExpired = (job) => Boolean(job.expired_at) || new Date(job.expires_at) <= new Date();
   const isSuspended = profile?.is_suspended
     && (!profile.suspended_until || new Date(profile.suspended_until) > new Date());
 
@@ -23,9 +46,31 @@ export function EmployerPanel({ user, profile, jobs, applications, conversations
     const succeeded = await onCreateJob(form);
     setBusy(false);
     if (succeeded) {
-      setForm({ server_name: '', role_title: '', description: '' });
+      setForm({
+        server_name: '',
+        role_title: '',
+        description: '',
+        category: 'moderation',
+        responsibilities: '',
+        requirements: '',
+        experience_level: 'any',
+        time_commitment: '',
+        location: 'Remote',
+        compensation_type: 'unspecified',
+        compensation_details: '',
+      });
       setShowForm(false);
     }
+  }
+
+  function updateForm(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  async function renewJob(jobId) {
+    setRenewingId(jobId);
+    await onRenewJob(jobId);
+    setRenewingId(null);
   }
 
   return (
@@ -47,23 +92,102 @@ export function EmployerPanel({ user, profile, jobs, applications, conversations
       )}
 
       {showForm && (
-        <form className="panel form-panel" onSubmit={createJob}>
-          <h3>Create a listing</h3>
+        <form className="panel form-panel listing-builder" onSubmit={createJob}>
+          <div className="listing-builder__heading">
+            <div><p className="eyebrow">CREATE A CLEAR, TRUSTWORTHY ROLE</p><h3>Build your staff listing</h3></div>
+            <span className="listing-builder__steps">Required details first · extras improve applicant fit</span>
+          </div>
           <div className="form-grid">
             <label className="form-field">
               <span>Server or community name</span>
-              <input required maxLength={100} value={form.server_name} onChange={(event) => setForm({ ...form, server_name: event.target.value })} placeholder="The Cozy Corner" />
+              <input required minLength={2} maxLength={100} value={form.server_name} onChange={(event) => updateForm('server_name', event.target.value)} placeholder="The Cozy Corner" />
             </label>
             <label className="form-field">
               <span>Role title</span>
-              <input required maxLength={100} value={form.role_title} onChange={(event) => setForm({ ...form, role_title: event.target.value })} placeholder="Community Moderator" />
+              <input required minLength={3} maxLength={100} value={form.role_title} onChange={(event) => updateForm('role_title', event.target.value)} placeholder="Community Moderator" />
+            </label>
+          </div>
+          <div className="form-grid">
+            <label className="form-field">
+              <span>Role category</span>
+              <select value={form.category} onChange={(event) => updateForm('category', event.target.value)}>
+                {LISTING_CATEGORIES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+              </select>
+            </label>
+            <label className="form-field">
+              <span>Experience level</span>
+              <select value={form.experience_level} onChange={(event) => updateForm('experience_level', event.target.value)}>
+                <option value="any">Open to all experience levels</option>
+                <option value="entry">Entry level / training provided</option>
+                <option value="intermediate">Some experience preferred</option>
+                <option value="experienced">Experienced applicants</option>
+              </select>
             </label>
           </div>
           <label className="form-field">
-            <span>Role description</span>
-            <textarea required minLength={30} maxLength={5000} rows={5} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="Describe your community, responsibilities, requirements, and time commitment…" />
+            <span>About the community and role</span>
+            <textarea required minLength={30} maxLength={5000} rows={5} value={form.description} onChange={(event) => updateForm('description', event.target.value)} placeholder="Introduce your server, explain why the role is open, and describe what success looks like…" />
+            <small>{form.description.length}/5000 · Avoid sharing private invites, passwords, or sensitive member information.</small>
           </label>
-          <button className="button button--primary" type="submit" disabled={busy}>{busy ? 'Publishing…' : 'Publish listing'}</button>
+          <details className="listing-builder__extras" open>
+            <summary>Role expectations & conditions <span>Help people decide if this role is right for them</span></summary>
+            <label className="form-field">
+              <span>Responsibilities</span>
+              <textarea maxLength={4000} rows={4} value={form.responsibilities} onChange={(event) => updateForm('responsibilities', event.target.value)} placeholder={'Welcome new members\nHelp enforce community guidelines\nEscalate difficult cases to senior staff'} />
+              <small>{form.responsibilities.length}/4000 · Use a new line for each responsibility.</small>
+            </label>
+            <label className="form-field">
+              <span>Requirements & preferred skills</span>
+              <textarea maxLength={4000} rows={4} value={form.requirements} onChange={(event) => updateForm('requirements', event.target.value)} placeholder={'Be respectful and reliable\nHave a few hours available each week\nPrior moderation experience is helpful, not required'} />
+              <small>{form.requirements.length}/4000 · Separate essentials from nice-to-haves.</small>
+            </label>
+            <div className="form-grid">
+              <label className="form-field">
+                <span>Expected time commitment</span>
+                <input maxLength={120} value={form.time_commitment} onChange={(event) => updateForm('time_commitment', event.target.value)} placeholder="About 4 hours per week" />
+              </label>
+              <label className="form-field">
+                <span>Location / time zone</span>
+                <input required minLength={2} maxLength={100} value={form.location} onChange={(event) => updateForm('location', event.target.value)} placeholder="Remote · Any time zone" />
+              </label>
+            </div>
+            <div className="form-grid">
+              <label className="form-field">
+                <span>Compensation</span>
+                <select value={form.compensation_type} onChange={(event) => updateForm('compensation_type', event.target.value)}>
+                  <option value="unspecified">Not specified</option>
+                  <option value="volunteer">Volunteer role</option>
+                  <option value="unpaid">Unpaid role</option>
+                  <option value="paid">Paid role</option>
+                </select>
+              </label>
+              {form.compensation_type === 'paid' && (
+                <label className="form-field">
+                  <span>Pay details (be specific)</span>
+                  <input required minLength={3} maxLength={250} value={form.compensation_details} onChange={(event) => updateForm('compensation_details', event.target.value)} placeholder="e.g. $15 USD per week; paid monthly" />
+                </label>
+              )}
+            </div>
+          </details>
+          <aside className="listing-builder-preview" aria-live="polite">
+            <span className="eyebrow">LIVE PREVIEW</span>
+            <strong>{form.role_title || 'Your role title'}</strong>
+            <span>{form.server_name || 'Your community'} · {LISTING_CATEGORIES.find(([value]) => value === form.category)?.[1]}</span>
+            <p>{form.description || 'Your role description will appear here.'}</p>
+            <div>
+              <span>{form.location || 'Location not set'}</span>
+              <span>{form.time_commitment || 'Time commitment not set'}</span>
+              <span>{form.experience_level === 'any' ? 'All experience levels' : `${form.experience_level} experience`}</span>
+              <span>{form.compensation_type === 'paid' ? form.compensation_details || 'Paid · add details' : form.compensation_type === 'unspecified' ? 'Compensation not specified' : form.compensation_type}</span>
+            </div>
+          </aside>
+          <small>Listings stay open for 30 days. You can have 5 active roles and publish up to 3 listings per day; duplicate open roles are blocked.</small>
+          <div className="listing-builder__actions">
+            <button className="button button--primary" type="submit" disabled={busy || (form.compensation_type === 'paid' && form.compensation_details.trim().length < 3)}>
+              {busy ? 'Publishing listing…' : 'Publish staff role'}
+            </button>
+            <button className="button button--outline" type="button" onClick={() => setShowForm(false)} disabled={busy}>Cancel</button>
+          </div>
         </form>
       )}
 
@@ -75,10 +199,24 @@ export function EmployerPanel({ user, profile, jobs, applications, conversations
               <div><h3>{job.role_title}</h3><p>{job.server_name}</p></div>
             </div>
             <div className="listing-row__actions">
-              <span className={`state-pill state-pill--${job.status}`}>{job.status}</span>
-              <select aria-label={`Set status for ${job.role_title}`} value={job.status} onChange={(event) => onUpdateJob(job.id, event.target.value)}>
+              <span className={`state-pill state-pill--${isExpired(job) ? 'expired' : job.status}`}>{isExpired(job) ? 'expired' : job.status}</span>
+              <select aria-label={`Set status for ${job.role_title}`} value={job.status} disabled={isExpired(job)} onChange={(event) => onUpdateJob(job.id, event.target.value)}>
                 <option value="open">Open</option><option value="closed">Closed</option><option value="filled">Filled</option>
               </select>
+              {job.expired_at && (
+                <button className="button button--outline" type="button" onClick={() => renewJob(job.id)} disabled={renewingId === job.id}>
+                  {renewingId === job.id ? 'Renewing…' : 'Renew for 30 days'}
+                </button>
+              )}
+              {isExpired(job) && !job.expired_at && <small>Renewal unlocks after expiry processing.</small>}
+            </div>
+            <div className="listing-row__review">
+              {job.expired_at
+                ? `Expired ${new Date(job.expired_at).toLocaleDateString()}`
+                : `Expires ${new Date(job.expires_at).toLocaleDateString()}`}
+              <span>{job.last_reviewed_at
+                ? `Last staff reviewed ${new Date(job.last_reviewed_at).toLocaleDateString()}`
+                : 'Not yet reviewed by staff'}</span>
             </div>
           </article>
         )) : <div className="empty-state empty-state--compact"><h3>No listings yet</h3><p>Post your first staff opening to start receiving applications.</p></div>}
@@ -104,7 +242,7 @@ export function EmployerPanel({ user, profile, jobs, applications, conversations
             </div>
             <label className="sr-only" htmlFor={`app-${application.id}`}>Application status</label>
             <select id={`app-${application.id}`} value={application.status} onChange={(event) => onUpdateApplication(application.id, event.target.value)}>
-              <option value="pending">Pending</option><option value="reviewing">Reviewing</option><option value="accepted">Accepted</option><option value="rejected">Rejected</option>
+              <option value="pending">New</option><option value="reviewing">Reviewing</option><option value="interview">Interview</option><option value="accepted">Accepted</option><option value="rejected">Declined</option>
             </select>
             <button
               className="button button--outline"

@@ -20,6 +20,10 @@ const ACTION_LABELS = {
   site_setting_changed: 'Site setting changed',
   pr_manager_role_changed: 'PR Manager access changed',
   pr_inquiry_answered: 'PR inquiry answered',
+  affiliate_application_approved: 'Affiliate application approved',
+  affiliate_application_rejected: 'Affiliate application rejected',
+  affiliate_commission_recorded: 'Affiliate commission recorded',
+  affiliate_commission_status_changed: 'Affiliate commission status changed',
 };
 
 function formatAuditValue(value) {
@@ -53,6 +57,9 @@ export default function AdminPanel({
   applications,
   settings,
   adCampaigns,
+  adCampaignStats = [],
+  webhookDeliveries = [],
+  affiliateDashboard = { applications: [], accounts: [], commissions: [] },
   onCloseListing,
   onDeleteListing,
   onWarn,
@@ -66,6 +73,10 @@ export default function AdminPanel({
   onSaveAdCampaign,
   onDeleteAdCampaign,
   onTestDiscordWebhook,
+  onRefreshWebhookStatus,
+  onReviewAffiliateApplication,
+  onRecordAffiliateCommission,
+  onSetAffiliateCommissionStatus,
   onBroadcast,
 }) {
   const [announcement, setAnnouncement] = useState(settings.announcement || '');
@@ -77,6 +88,7 @@ export default function AdminPanel({
   const [suspendHours, setSuspendHours] = useState('24');
   const [saving, setSaving] = useState(false);
   const [webhookTesting, setWebhookTesting] = useState(false);
+  const [webhookRefreshing, setWebhookRefreshing] = useState(false);
   const [reportStatus, setReportStatus] = useState('pending');
   const [reportType, setReportType] = useState('all');
   const [reportSearch, setReportSearch] = useState('');
@@ -88,12 +100,19 @@ export default function AdminPanel({
   const [auditType, setAuditType] = useState('all');
   const [campaignDraft, setCampaignDraft] = useState(null);
   const [editingCampaignId, setEditingCampaignId] = useState(null);
+  const [selectedAffiliateId, setSelectedAffiliateId] = useState('');
+  const [selectedReferralId, setSelectedReferralId] = useState('');
+  const [commissionDescription, setCommissionDescription] = useState('');
+  const [commissionAmount, setCommissionAmount] = useState('');
+  const [commissionNotes, setCommissionNotes] = useState('');
   const rank = currentProfile?.admin_level ?? 0;
   const canAssign = (member) => member.id !== currentProfile?.id
     && (rank === 6 ? member.admin_level <= 5 : member.admin_level <= 3);
   const pendingReports = reports.filter((report) => report.status === 'pending').length;
-  const openListings = jobs.filter((job) => job.status === 'open').length;
-  const activeApplications = applications.filter((application) => ['pending', 'reviewing'].includes(application.status)).length;
+  const openListings = jobs.filter((job) => job.status === 'open'
+    && new Date(job.expires_at) > new Date()
+    && !job.expired_at).length;
+  const activeApplications = applications.filter((application) => ['pending', 'reviewing', 'interview'].includes(application.status)).length;
   const promotionCandidates = getPromotionReviewCandidates(profiles, promotionActivity, rank);
   const reviewableActions = staffActions.filter((action) => isPromotionCaseworkAction(action.action));
   const filteredAudit = staffActions.filter((entry) => {
@@ -211,6 +230,12 @@ export default function AdminPanel({
     setWebhookTesting(false);
   }
 
+  async function refreshWebhookStatus() {
+    setWebhookRefreshing(true);
+    await onRefreshWebhookStatus();
+    setWebhookRefreshing(false);
+  }
+
   async function sendBroadcast(event) {
     event.preventDefault();
     setSaving(true);
@@ -225,6 +250,37 @@ export default function AdminPanel({
   async function setPrManager(member) {
     setSaving(true);
     await onSetPrManager(member.id, !member.is_pr_manager);
+    setSaving(false);
+  }
+
+  async function reviewAffiliateApplication(userId, decision) {
+    setSaving(true);
+    await onReviewAffiliateApplication(userId, decision);
+    setSaving(false);
+  }
+
+  async function recordAffiliateCommission(event) {
+    event.preventDefault();
+    setSaving(true);
+    const recorded = await onRecordAffiliateCommission({
+      affiliate_user_id: selectedAffiliateId,
+      referral_id: selectedReferralId || null,
+      description: commissionDescription,
+      amount: Number(commissionAmount),
+      notes: commissionNotes,
+    });
+    setSaving(false);
+    if (recorded) {
+      setSelectedReferralId('');
+      setCommissionDescription('');
+      setCommissionAmount('');
+      setCommissionNotes('');
+    }
+  }
+
+  async function updateAffiliateCommission(id, status) {
+    setSaving(true);
+    await onSetAffiliateCommissionStatus(id, status);
     setSaving(false);
   }
 
@@ -474,6 +530,17 @@ export default function AdminPanel({
                     <span>{ROLES[member.admin_level]} · Level {member.admin_level}</span>
                   </div>
                   <span className="promotion-candidate__evidence">{member.promotionActivity} casework actions · 30d</span>
+                  <a
+                    className="promotion-candidate__evidence-link"
+                    href="#admin-audit"
+                    onClick={(event) => {
+                      openDashboardSection(event);
+                      setAuditSearch(member.username || '');
+                      setAuditType('all');
+                    }}
+                  >
+                    Review attributed actions →
+                  </a>
                 </article>
               ))}
               <p className="promotion-review-hint">Review evidence in the audit log, check pending staff-conduct reports, then use staff access controls to make any promotion. Each change records the acting staff member.</p>
@@ -537,6 +604,80 @@ export default function AdminPanel({
             </article>
           ))}
           {!profiles.some((member) => `${member.username} ${member.discord_id || ''}`.toLowerCase().includes(prManagerSearch.trim().toLowerCase())) && <div className="empty-state empty-state--compact"><p>No accounts match this search.</p></div>}
+        </div>
+      </PermissionSection>
+
+      <PermissionSection id="admin-affiliates" minLevel={6} profile={currentProfile} title="Affiliate program" description="Review applications, attribute advertising leads, and record actual USD commissions. This dashboard does not process payments.">
+        <div className="subsection-heading"><h3>Affiliate applications</h3><span>{affiliateDashboard.applications?.length || 0} pending</span></div>
+        <div className="panel-list">
+          {(affiliateDashboard.applications || []).map((application) => (
+            <article className="panel affiliate-review-card" key={application.user_id}>
+              <div className="affiliate-review-card__copy">
+                <strong>{application.username || 'Discord member'}</strong>
+                <small>{new Date(application.created_at).toLocaleString()}</small>
+                <p><b>Promotion channels:</b> {application.promotion_channels}</p>
+                <p><b>Application:</b> {application.reason}</p>
+              </div>
+              <div className="listing-row__actions">
+                <button className="button button--primary" type="button" onClick={() => reviewAffiliateApplication(application.user_id, 'approve')} disabled={saving}>Approve & create link</button>
+                <button className="button button--danger" type="button" onClick={() => reviewAffiliateApplication(application.user_id, 'reject')} disabled={saving}>Reject</button>
+              </div>
+            </article>
+          ))}
+          {!affiliateDashboard.applications?.length && <div className="empty-state empty-state--compact"><p>No affiliate applications are waiting for review.</p></div>}
+        </div>
+
+        <div className="subsection-heading"><h3>Record a commission</h3></div>
+        <form className="panel form-panel affiliate-commission-form" onSubmit={recordAffiliateCommission}>
+          <label className="form-field">
+            <span>Affiliate</span>
+            <select required value={selectedAffiliateId} onChange={(event) => { setSelectedAffiliateId(event.target.value); setSelectedReferralId(''); }}>
+              <option value="">Choose an active affiliate</option>
+              {(affiliateDashboard.accounts || []).filter((account) => account.status === 'active').map((account) => (
+                <option value={account.user_id} key={account.user_id}>{account.username} · {account.referral_count} referred inquiries</option>
+              ))}
+            </select>
+          </label>
+          {selectedAffiliateId && (
+            <label className="form-field">
+              <span>Attributed advertising inquiry (optional)</span>
+              <select value={selectedReferralId} onChange={(event) => setSelectedReferralId(event.target.value)}>
+                <option value="">Record without linking a specific inquiry</option>
+                {(affiliateDashboard.accounts || []).find((account) => account.user_id === selectedAffiliateId)?.referrals?.map((referral) => (
+                  <option value={referral.id} key={referral.id}>{referral.subject} · {new Date(referral.created_at).toLocaleDateString()}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          <div className="form-grid">
+            <label className="form-field"><span>Commission description</span><input required minLength={3} maxLength={200} value={commissionDescription} onChange={(event) => setCommissionDescription(event.target.value)} placeholder="Qualified advertiser referral" /></label>
+            <label className="form-field"><span>Actual commission (USD)</span><input required type="number" min="0.01" max="1000000" step="0.01" value={commissionAmount} onChange={(event) => setCommissionAmount(event.target.value)} placeholder="0.00" /></label>
+          </div>
+          <label className="form-field"><span>Internal note (optional)</span><textarea maxLength={500} rows={2} value={commissionNotes} onChange={(event) => setCommissionNotes(event.target.value)} placeholder="Reference or reconciliation note; no payment credentials." /></label>
+          <button className="button button--primary" type="submit" disabled={saving || !selectedAffiliateId || Number(commissionAmount) <= 0}>Record pending commission</button>
+        </form>
+
+        <div className="subsection-heading"><h3>Affiliate commission ledger</h3><span>{affiliateDashboard.commissions?.length || 0} entries</span></div>
+        <div className="panel-list">
+          {(affiliateDashboard.commissions || []).map((commission) => (
+            <article className="panel affiliate-commission" key={commission.id}>
+              <div>
+                <strong>{commission.username} · {commission.description}</strong>
+                <small>{new Date(commission.created_at).toLocaleString()}{commission.notes ? ` · ${commission.notes}` : ''}</small>
+              </div>
+              <strong>{Number(commission.amount).toLocaleString(undefined, { style: 'currency', currency: commission.currency })}</strong>
+              <span className={`state-pill state-pill--${commission.status === 'paid' ? 'accepted' : commission.status === 'void' ? 'rejected' : commission.status === 'approved' ? 'open' : 'pending'}`}>{commission.status}</span>
+              {commission.status === 'pending' && <button className="button button--outline" type="button" onClick={() => updateAffiliateCommission(commission.id, 'approved')} disabled={saving}>Approve</button>}
+              {commission.status === 'approved' && (
+                <>
+                  <button className="button button--primary" type="button" onClick={() => updateAffiliateCommission(commission.id, 'paid')} disabled={saving}>Mark paid externally</button>
+                  <button className="button button--danger" type="button" onClick={() => updateAffiliateCommission(commission.id, 'void')} disabled={saving}>Void</button>
+                </>
+              )}
+              {commission.status === 'pending' && <button className="button button--danger" type="button" onClick={() => updateAffiliateCommission(commission.id, 'void')} disabled={saving}>Void</button>}
+            </article>
+          ))}
+          {!affiliateDashboard.commissions?.length && <div className="empty-state empty-state--compact"><p>No commissions have been recorded.</p></div>}
         </div>
       </PermissionSection>
 
@@ -625,6 +766,31 @@ export default function AdminPanel({
             {webhookTesting ? 'Queueing test…' : 'Send test alert'}
           </button>
         </section>
+        <section className="panel webhook-delivery-status" aria-labelledby="webhook-delivery-title">
+          <div className="profile-section-heading">
+            <div><p className="eyebrow">DELIVERY HEALTH</p><h3 id="webhook-delivery-title">Recent Discord alerts</h3></div>
+            <button className="button button--outline" type="button" onClick={refreshWebhookStatus} disabled={webhookRefreshing}>
+              {webhookRefreshing ? 'Refreshing…' : 'Refresh'}
+            </button>
+          </div>
+          <div className="webhook-delivery-list">
+            {webhookDeliveries.map((delivery) => (
+              <article className="webhook-delivery-row" key={delivery.request_id}>
+                <div>
+                  <strong>{delivery.event_name.replaceAll('_', ' ')}</strong>
+                  <small>{delivery.actor_name || 'System'} · {new Date(delivery.queued_at).toLocaleString()}</small>
+                </div>
+                <span className={`state-pill ${delivery.timed_out || delivery.error_msg || (delivery.status_code && delivery.status_code >= 400) ? 'state-pill--rejected' : delivery.status_code ? 'state-pill--accepted' : 'state-pill--pending'}`}>
+                  {delivery.timed_out ? 'Timed out'
+                    : delivery.error_msg ? `Request error${delivery.status_code ? ` · HTTP ${delivery.status_code}` : ''}`
+                      : delivery.status_code && delivery.status_code >= 400 ? `HTTP ${delivery.status_code} · error`
+                      : delivery.status_code ? `HTTP ${delivery.status_code}` : 'Queued'}
+                </span>
+              </article>
+            ))}
+            {!webhookDeliveries.length && <p className="admin-subsection__description">No recent webhook deliveries are recorded yet. Send a test alert to verify the connection.</p>}
+          </div>
+        </section>
         <section className="ad-campaign-manager" aria-labelledby="ad-campaign-heading">
           <div className="profile-section-heading">
             <div><p className="eyebrow">SPONSORED PLACEMENTS</p><h3 id="ad-campaign-heading">Ad campaigns</h3></div>
@@ -702,6 +868,14 @@ export default function AdminPanel({
                   <span className={`state-pill state-pill--${campaign.is_active ? 'open' : 'pending'}`}>{campaign.is_active ? 'Published' : 'Draft / paused'}</span>
                   <h4>{campaign.title}</h4>
                   <p>{campaign.advertiser_name} · {campaign.media_type} · {campaign.placements.map((placement) => placement === 'listing_feed' ? 'between listings' : 'homepage').join(', ')}</p>
+                  {(() => {
+                    const stats = adCampaignStats.find((item) => item.campaign_id === campaign.id);
+                    const impressions = Number(stats?.impressions || 0);
+                    const clicks = Number(stats?.clicks || 0);
+                    return <small className="ad-campaign-row__metrics">
+                      30-day performance: {impressions.toLocaleString()} impressions · {clicks.toLocaleString()} clicks · {impressions ? `${(clicks / impressions * 100).toFixed(1)}% CTR` : '— CTR'}
+                    </small>;
+                  })()}
                 </div>
                 <div className="ad-campaign-row__actions">
                   <button className="button button--outline" type="button" onClick={() => startCampaignDraft(campaign)} disabled={saving}>Edit</button>
@@ -714,7 +888,7 @@ export default function AdminPanel({
         </section>
       </PermissionSection>
 
-      <PermissionSection id="admin-site-metrics" minLevel={6} profile={currentProfile} title="Website metrics" description="Operational snapshot calculated from data already loaded for the staff workspace. Counts are not a privacy-safe unique visitor metric and no analytics events are written.">
+      <PermissionSection id="admin-site-metrics" minLevel={6} profile={currentProfile} title="Website metrics" description="Operational totals and aggregated, approximate campaign impressions and clicks. Ad events are deduplicated per browser tab session; they are not a unique-visitor measure.">
         <div className="site-metrics-grid">
           <article className="panel site-metric"><span>Registered accounts</span><strong>{profiles.length}</strong></article>
           <article className="panel site-metric"><span>All listings</span><strong>{jobs.length}</strong></article>
@@ -725,7 +899,7 @@ export default function AdminPanel({
           <article className="panel site-metric"><span>New listings · 30 days</span><strong>{newListings30d}</strong></article>
           <article className="panel site-metric"><span>Reports awaiting review</span><strong>{pendingReports}</strong></article>
         </div>
-        <p className="site-metrics-note">For promotion and marketing decisions, use these operational counts alongside actual campaign data. This dashboard deliberately avoids per-visitor tracking, extra analytics tables, and high-volume database writes.</p>
+        <p className="site-metrics-note">Ad performance is retained as daily campaign totals for 90 days. Impressions are counted only after a sponsor card enters view, and clicks are counted when its destination is opened. Browser-side session deduplication means these are directional, not audited billing metrics.</p>
       </PermissionSection>
 
       <PermissionSection id="admin-broadcast" minLevel={5} profile={currentProfile} title="Community broadcast" description="Send a notice to every registered account. It will appear in their inbox immediately.">

@@ -24,6 +24,7 @@ export default function Header({
   const workspaceLinks = [
     { id: 'profile', label: 'My profile' },
     { id: 'applications', label: 'My applications' },
+    { id: 'affiliates', label: 'Affiliate program' },
     { id: 'notifications', label: 'Inbox', badge: unreadCount },
     { id: 'messages', label: 'Chats & messages' },
     ...(profile?.is_pr_manager || adminLevel >= 6 ? [{ id: 'pr-contact', label: 'PR team inbox', badge: prInboxCount }] : []),
@@ -72,10 +73,16 @@ export default function Header({
           >
             Partnerships & ads
           </button>
+          <button
+            className={`site-header__link${activeView === 'affiliates' ? ' is-active' : ''}`}
+            onClick={() => navigate('affiliates')}
+          >
+            Affiliates
+          </button>
           {user && (
             <div className="workspace-menu">
               <button
-                className={`site-header__link workspace-menu__toggle${['profile', 'applications', 'notifications', 'messages', 'admin', 'pr-contact'].includes(activeView) ? ' is-active' : ''}`}
+                className={`site-header__link workspace-menu__toggle${['profile', 'applications', 'affiliates', 'notifications', 'messages', 'admin', 'pr-contact'].includes(activeView) ? ' is-active' : ''}`}
                 type="button"
                 aria-expanded={workspaceOpen}
                 aria-controls="workspace-menu-items"

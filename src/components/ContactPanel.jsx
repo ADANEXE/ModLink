@@ -11,6 +11,7 @@ export default function ContactPanel({
   profile,
   inquiries,
   initialTopic,
+  affiliateReferralCode,
   onSignIn,
   onSubmit,
   onAnswer,
@@ -78,6 +79,9 @@ export default function ContactPanel({
             <p className="contact-form__privacy">
               Include your advertiser name, campaign goal and audience, requested placement, final copy, HTTPS destination and media links, plus confirmation that you have rights to the creative. PR Managers review inquiries; the Owner makes the final campaign approval and publication decision.
             </p>
+          )}
+          {topic === 'advertising' && affiliateReferralCode && (
+            <p className="affiliate-referral-notice">Affiliate referral detected. If this inquiry is qualified, the referring affiliate may receive commission credit.</p>
           )}
           <label className="form-field">
             <span>Subject</span>

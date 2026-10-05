@@ -7,11 +7,37 @@ import AdminPanel from './components/AdminPanel.jsx';
 import ChatPanel from './components/ChatPanel.jsx';
 import NotificationsPanel from './components/NotificationsPanel.jsx';
 import ContactPanel from './components/ContactPanel.jsx';
+import AffiliatePanel from './components/AffiliatePanel.jsx';
 import ProfilePanel from './components/ProfilePanel.jsx';
 import SponsoredCampaign from './components/SponsoredCampaign.jsx';
 import { EmployerPanel } from './components/WorkspacePanels.jsx';
 import { getPromotionReviewCandidates } from './lib/staffPromotion.js';
 import { isSupabaseConfigured, supabaseClient } from './lib/supabaseClient.js';
+
+const trackedAdEvents = new Set();
+
+function readAffiliateCode() {
+  const urlCode = new URLSearchParams(window.location.search).get('ref')?.trim().toLowerCase();
+  if (urlCode && /^[a-f0-9]{12}$/.test(urlCode)) {
+    try {
+      window.localStorage.setItem('modlink-affiliate-referral', JSON.stringify({
+        code: urlCode,
+        expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+      }));
+    } catch {
+      return urlCode;
+    }
+    return urlCode;
+  }
+  try {
+    const stored = JSON.parse(window.localStorage.getItem('modlink-affiliate-referral') || 'null');
+    if (stored?.expiresAt > Date.now() && /^[a-f0-9]{12}$/.test(stored.code)) return stored.code;
+    window.localStorage.removeItem('modlink-affiliate-referral');
+  } catch {
+    return null;
+  }
+  return null;
+}
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -28,17 +54,29 @@ export default function App() {
   const [announcement, setAnnouncement] = useState('');
   const [adCampaigns, setAdCampaigns] = useState([]);
   const [adminAdCampaigns, setAdminAdCampaigns] = useState([]);
+  const [adCampaignStats, setAdCampaignStats] = useState([]);
+  const [webhookDeliveries, setWebhookDeliveries] = useState([]);
+  const [notificationPreferences, setNotificationPreferences] = useState({ weekly_digest: false, role_keywords: [] });
+  const [affiliateDashboard, setAffiliateDashboard] = useState({ application: null, account: null, referral_count: 0, commissions: [] });
+  const [ownerAffiliateDashboard, setOwnerAffiliateDashboard] = useState({ applications: [], accounts: [], commissions: [] });
+  const [affiliateReferralCode] = useState(readAffiliateCode);
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [conversations, setConversations] = useState([]);
   const [selectedConversationId, setSelectedConversationId] = useState(null);
-  const [focusListingId, setFocusListingId] = useState(null);
+  const [focusListingId, setFocusListingId] = useState(() => new URLSearchParams(window.location.search).get('listing'));
   const [activeView, setActiveView] = useState('opportunities');
   const [contactTopic, setContactTopic] = useState('general');
   const [authBusy, setAuthBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [notice, setNotice] = useState('');
+
+  useEffect(() => {
+    const syncListingFromUrl = () => setFocusListingId(new URLSearchParams(window.location.search).get('listing'));
+    window.addEventListener('popstate', syncListingFromUrl);
+    return () => window.removeEventListener('popstate', syncListingFromUrl);
+  }, []);
 
   useEffect(() => {
     if (!supabaseClient) {
@@ -100,6 +138,12 @@ export default function App() {
           .from('chat_conversations')
           .select('id, application_id, listing_id, owner_id, applicant_id, created_at, last_message_at, owner:profiles!chat_conversations_owner_id_fkey(username, avatar_url), applicant:profiles!chat_conversations_applicant_id_fkey(username, avatar_url), job:job_listings!chat_conversations_listing_id_fkey(server_name, role_title)')
           .order('last_message_at', { ascending: false }),
+        supabaseClient
+          .from('user_notification_preferences')
+          .select('weekly_digest_enabled, role_keywords')
+          .eq('user_id', session.user.id)
+          .maybeSingle(),
+        supabaseClient.rpc('my_affiliate_dashboard'),
       );
     }
 
@@ -139,6 +183,8 @@ export default function App() {
       const profileResult = results[2];
       const notificationsResult = results[3];
       const conversationsResult = results[4];
+      const preferencesResult = results[5];
+      const affiliateResult = results[6];
       if (applicationsResult.error) {
         setMessage(`Unable to load applications: ${applicationsResult.error.message}`);
       } else {
@@ -153,6 +199,13 @@ export default function App() {
       else setNotifications(notificationsResult.data || []);
       if (conversationsResult.error) setMessage(`Unable to load chats: ${conversationsResult.error.message}`);
       else setConversations(conversationsResult.data || []);
+      if (preferencesResult.error) setMessage(`Unable to load notification preferences: ${preferencesResult.error.message}`);
+      else setNotificationPreferences({
+        weekly_digest: preferencesResult.data?.weekly_digest_enabled ?? false,
+        role_keywords: preferencesResult.data?.role_keywords ?? [],
+      });
+      if (affiliateResult.error) setMessage(`Unable to load your affiliate status: ${affiliateResult.error.message}`);
+      else setAffiliateDashboard(affiliateResult.data || { application: null, account: null, referral_count: 0, commissions: [] });
       const { data: warningData, error: warningsError } = await supabaseClient
         .from('moderation_warnings')
         .select('id, reason, created_at')
@@ -171,7 +224,7 @@ export default function App() {
       } else setPrInquiries(prInquiryData || []);
 
       if (!profileResult.error && (profileResult.data?.admin_level ?? 0) >= 5) {
-        const [profilesResult, reportsResult, settingsResult, staffActionsResult, promotionActivityResult, adCampaignsResult] = await Promise.all([
+        const [profilesResult, reportsResult, settingsResult, staffActionsResult, promotionActivityResult, adCampaignsResult, adStatsResult, webhookDeliveriesResult, affiliateDashboardResult] = await Promise.all([
           supabaseClient.from('profiles')
             .select('id, discord_id, username, avatar_url, admin_level, is_verified_moderator, is_pr_manager, suspended_until, suspension_reason, is_suspended')
             .order('username'),
@@ -190,6 +243,15 @@ export default function App() {
           (profileResult.data?.admin_level ?? 0) >= 6
             ? supabaseClient.from('ad_campaigns').select('*').order('created_at', { ascending: false })
             : Promise.resolve({ data: [], error: null }),
+          (profileResult.data?.admin_level ?? 0) >= 6
+            ? supabaseClient.rpc('owner_ad_campaign_stats')
+            : Promise.resolve({ data: [], error: null }),
+          (profileResult.data?.admin_level ?? 0) >= 6
+            ? supabaseClient.rpc('owner_recent_discord_webhook_deliveries')
+            : Promise.resolve({ data: [], error: null }),
+          (profileResult.data?.admin_level ?? 0) >= 6
+            ? supabaseClient.rpc('owner_affiliate_dashboard')
+            : Promise.resolve({ data: { applications: [], accounts: [], commissions: [] }, error: null }),
         ]);
         if (profilesResult.error) setMessage(`Unable to load member directory: ${profilesResult.error.message}`);
         else setProfiles(profilesResult.data || []);
@@ -199,6 +261,12 @@ export default function App() {
         else setSettings(Object.fromEntries((settingsResult.data || []).map((item) => [item.key, item.value])));
         if (adCampaignsResult.error) setMessage(`Unable to load ad campaigns: ${adCampaignsResult.error.message}`);
         else setAdminAdCampaigns(adCampaignsResult.data || []);
+        if (adStatsResult.error) setMessage(`Unable to load ad campaign metrics: ${adStatsResult.error.message}`);
+        else setAdCampaignStats(adStatsResult.data || []);
+        if (webhookDeliveriesResult.error) setMessage(`Unable to load Discord delivery status: ${webhookDeliveriesResult.error.message}`);
+        else setWebhookDeliveries(webhookDeliveriesResult.data || []);
+        if (affiliateDashboardResult.error) setMessage(`Unable to load affiliate program data: ${affiliateDashboardResult.error.message}`);
+        else setOwnerAffiliateDashboard(affiliateDashboardResult.data || { applications: [], accounts: [], commissions: [] });
         if (staffActionsResult.error) setMessage(`Unable to load staff action history: ${staffActionsResult.error.message}`);
         else setStaffActions(staffActionsResult.data || []);
         if (promotionActivityResult.error) {
@@ -227,6 +295,9 @@ export default function App() {
         }
         setSettings({});
         setAdminAdCampaigns([]);
+        setAdCampaignStats([]);
+        setWebhookDeliveries([]);
+        setOwnerAffiliateDashboard({ applications: [], accounts: [], commissions: [] });
         setStaffActions([]);
         setPromotionActivity([]);
       }
@@ -240,6 +311,11 @@ export default function App() {
       setWarnings([]);
       setSettings({});
       setAdminAdCampaigns([]);
+      setAdCampaignStats([]);
+      setWebhookDeliveries([]);
+      setNotificationPreferences({ weekly_digest: false, role_keywords: [] });
+      setAffiliateDashboard({ application: null, account: null, referral_count: 0, commissions: [] });
+      setOwnerAffiliateDashboard({ applications: [], accounts: [], commissions: [] });
       setNotifications([]);
       setConversations([]);
       setPrInquiries([]);
@@ -299,9 +375,10 @@ export default function App() {
   }
 
   async function handleApply(job, experienceSummary) {
-    const { error } = await supabaseClient
-      .from('applications')
-      .insert({ job_id: job.id, applicant_id: session.user.id, experience_summary: experienceSummary });
+    const { error } = await supabaseClient.rpc('submit_job_application', {
+      target_job_id: job.id,
+      experience_text: experienceSummary,
+    });
     if (error) {
       setMessage(error.code === '23505'
         ? 'You have already applied to this listing.'
@@ -360,6 +437,7 @@ export default function App() {
       inquiry_topic: topic,
       inquiry_subject: subject,
       inquiry_message: inquiryMessage,
+      provided_referral_code: topic === 'advertising' ? affiliateReferralCode : null,
     });
     if (error) {
       setMessage(`Unable to send PR inquiry: ${error.message}`);
@@ -443,20 +521,32 @@ export default function App() {
       setSelectedConversationId(notification.link_id);
       setActiveView('messages');
     } else if (notification.link_type === 'listing') {
-      setFocusListingId(notification.link_id);
+      handleOpenListing(notification.link_id);
       setActiveView('opportunities');
     } else if (notification.link_type === 'application') {
       setActiveView(notification.type === 'new_application' ? 'employer' : 'applications');
     } else if (notification.link_type === 'pr_inquiry') {
       await loadData();
       setActiveView('pr-contact');
+    } else if (notification.link_type === 'digest') {
+      setActiveView('opportunities');
     }
   }
 
   async function handleCreateJob(values) {
-    const { error } = await supabaseClient
-      .from('job_listings')
-      .insert({ ...values, owner_id: session.user.id });
+    const { error } = await supabaseClient.rpc('create_job_listing', {
+      listing_server_name: values.server_name,
+      listing_role_title: values.role_title,
+      listing_description: values.description,
+      listing_category: values.category,
+      listing_responsibilities: values.responsibilities,
+      listing_requirements: values.requirements,
+      listing_experience_level: values.experience_level,
+      listing_time_commitment: values.time_commitment,
+      listing_location: values.location,
+      listing_compensation_type: values.compensation_type,
+      listing_compensation_details: values.compensation_details,
+    });
     if (error) {
       setMessage(`Unable to publish listing: ${error.message}`);
       return false;
@@ -464,6 +554,155 @@ export default function App() {
     setNotice('Your role is now listed in open opportunities.');
     await loadData();
     return true;
+  }
+
+  async function handleRenewJob(jobId) {
+    const { error } = await supabaseClient.rpc('renew_job_listing', { target_listing_id: jobId });
+    if (error) {
+      setMessage(`Unable to renew listing: ${error.message}`);
+      return false;
+    }
+    setNotice('Listing renewed for another 30 days.');
+    await loadData();
+    return true;
+  }
+
+  async function refreshAffiliateDashboards() {
+    const { data: personalData, error: personalError } = await supabaseClient.rpc('my_affiliate_dashboard');
+    if (personalError) {
+      setMessage(`Unable to refresh affiliate dashboard: ${personalError.message}`);
+      return false;
+    }
+    setAffiliateDashboard(personalData || { application: null, account: null, referral_count: 0, commissions: [] });
+    if ((profile?.admin_level ?? 0) >= 6) {
+      const { data: ownerData, error: ownerError } = await supabaseClient.rpc('owner_affiliate_dashboard');
+      if (ownerError) {
+        setMessage(`Unable to refresh Owner affiliate dashboard: ${ownerError.message}`);
+        return false;
+      }
+      setOwnerAffiliateDashboard(ownerData || { applications: [], accounts: [], commissions: [] });
+    }
+    return true;
+  }
+
+  async function handleApplyAffiliate(reason, channels) {
+    const { error } = await supabaseClient.rpc('submit_affiliate_application', {
+      application_reason: reason,
+      application_channels: channels,
+    });
+    if (error) {
+      setMessage(`Unable to submit affiliate application: ${error.message}`);
+      return false;
+    }
+    setNotice('Affiliate application submitted for Owner review.');
+    await refreshAffiliateDashboards();
+    return true;
+  }
+
+  async function handleReviewAffiliateApplication(userId, decision) {
+    const { error } = await supabaseClient.rpc('owner_review_affiliate_application', {
+      target_user_id: userId,
+      decision,
+    });
+    if (error) {
+      setMessage(`Unable to ${decision} affiliate application: ${error.message}`);
+      return false;
+    }
+    setNotice(decision === 'approve' ? 'Affiliate approved and referral link created.' : 'Affiliate application rejected.');
+    await refreshAffiliateDashboards();
+    return true;
+  }
+
+  async function handleRecordAffiliateCommission(commission) {
+    const { error } = await supabaseClient.rpc('owner_record_affiliate_commission', {
+      target_affiliate_user_id: commission.affiliate_user_id,
+      target_referral_id: commission.referral_id,
+      commission_description: commission.description,
+      commission_amount: commission.amount,
+      commission_notes: commission.notes,
+    });
+    if (error) {
+      setMessage(`Unable to record affiliate commission: ${error.message}`);
+      return false;
+    }
+    setNotice('Pending affiliate commission recorded.');
+    await refreshAffiliateDashboards();
+    return true;
+  }
+
+  async function handleSetAffiliateCommissionStatus(id, status) {
+    const { error } = await supabaseClient.rpc('owner_set_affiliate_commission_status', {
+      target_commission_id: id,
+      new_status: status,
+    });
+    if (error) {
+      setMessage(`Unable to update affiliate commission: ${error.message}`);
+      return false;
+    }
+    setNotice(status === 'paid' ? 'Commission marked paid externally.' : `Commission ${status}.`);
+    await refreshAffiliateDashboards();
+    return true;
+  }
+
+  async function handleSaveNotificationPreferences(preferences) {
+    const { data, error } = await supabaseClient.rpc('save_notification_preferences', {
+      weekly_digest_enabled: preferences.weekly_digest,
+      role_keywords: preferences.role_keywords,
+    });
+    if (error) {
+      setMessage(`Unable to save notification preferences: ${error.message}`);
+      return false;
+    }
+    setNotificationPreferences({
+      weekly_digest: data.weekly_digest,
+      role_keywords: data.role_keywords,
+    });
+    setNotice('Notification preferences saved.');
+    return true;
+  }
+
+  function handleOpenListing(jobId) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('listing', jobId);
+    window.history.pushState({}, '', url);
+    setFocusListingId(jobId);
+  }
+
+  function handleClearListingFocus() {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('listing');
+    window.history.replaceState({}, '', url);
+    setFocusListingId(null);
+  }
+
+  async function handleAdEvent(campaignId, eventKind) {
+    const day = new Date().toISOString().slice(0, 10);
+    const storageKey = `modlink-ad-${eventKind}-${campaignId}-${day}`;
+    if (trackedAdEvents.has(storageKey)) return;
+    try {
+      if (window.sessionStorage.getItem(storageKey)) {
+        trackedAdEvents.add(storageKey);
+        return;
+      }
+      window.sessionStorage.setItem(storageKey, '1');
+    } catch {
+      // Storage may be disabled by browser privacy settings; still record the event.
+    }
+    trackedAdEvents.add(storageKey);
+    const { error } = await supabaseClient.rpc('record_ad_campaign_event', {
+      target_campaign_id: campaignId,
+      event_kind: eventKind,
+    });
+    if (error) {
+      trackedAdEvents.delete(storageKey);
+      try {
+        window.sessionStorage.removeItem(storageKey);
+      } catch {
+        setMessage(`Unable to record ad ${eventKind}: ${error.message}`);
+        return;
+      }
+      setMessage(`Unable to record ad ${eventKind}: ${error.message}`);
+    }
   }
 
   async function handleSaveProfile(values) {
@@ -574,9 +813,33 @@ export default function App() {
   );
   const displayName = profile?.username || session?.user?.user_metadata?.full_name || 'Discord member';
   const openJobs = jobs
-    .filter((job) => job.status === 'open')
+    .filter((job) => job.status === 'open'
+      && new Date(job.expires_at) > new Date()
+      && !job.expired_at)
     .sort((first, second) => new Date(second.created_at) - new Date(first.created_at));
   const featuredJobs = openJobs.filter((job) => job.is_featured);
+  const focusedJob = openJobs.find((job) => job.id === focusListingId);
+  const listingCanonical = new URL(import.meta.env.BASE_URL, window.location.origin);
+  if (focusedJob) listingCanonical.searchParams.set('listing', focusedJob.id);
+  const jobPosting = focusedJob ? {
+    '@context': 'https://schema.org',
+    '@type': 'JobPosting',
+    title: focusedJob.role_title,
+    description: focusedJob.description,
+    datePosted: focusedJob.created_at,
+    validThrough: focusedJob.expires_at,
+    directApply: true,
+    identifier: {
+      '@type': 'PropertyValue',
+      name: focusedJob.server_name,
+      value: focusedJob.id,
+    },
+    hiringOrganization: {
+      '@type': 'Organization',
+      name: focusedJob.server_name,
+    },
+    url: listingCanonical.href,
+  } : null;
   const homepageJobList = {
     '@context': 'https://schema.org',
     '@type': 'ItemList',
@@ -589,6 +852,27 @@ export default function App() {
       description: job.description || `Open ${job.role_title} opportunity at ${job.server_name}.`,
     })),
   };
+
+  useEffect(() => {
+    const title = focusedJob
+      ? `${focusedJob.role_title} at ${focusedJob.server_name} | ModLink`
+      : 'Discord Moderator Jobs & Community Staff Roles | ModLink';
+    const description = focusedJob
+      ? `${focusedJob.description.slice(0, 145)}${focusedJob.description.length > 145 ? '…' : ''}`
+      : 'Find Discord moderator jobs, gaming server staff roles, and online community management opportunities with ModLink.';
+    document.title = title;
+    const updateMeta = (selector, attribute, value) => {
+      const element = document.querySelector(selector);
+      if (element) element.setAttribute(attribute, value);
+    };
+    updateMeta('meta[name="description"]', 'content', description);
+    updateMeta('meta[property="og:title"]', 'content', title);
+    updateMeta('meta[property="og:description"]', 'content', description);
+    updateMeta('meta[name="twitter:title"]', 'content', title);
+    updateMeta('meta[name="twitter:description"]', 'content', description);
+    updateMeta('meta[property="og:url"]', 'content', listingCanonical.href);
+    updateMeta('link[rel="canonical"]', 'href', listingCanonical.href);
+  }, [focusedJob, listingCanonical.href]);
 
   if (maintenanceMode && adminLevel < 6) {
     return (
@@ -626,6 +910,7 @@ export default function App() {
         authBusy={authBusy}
       />
       <main>
+        {jobPosting && <script type="application/ld+json">{JSON.stringify(jobPosting).replaceAll('<', '\\u003c')}</script>}
         {activeView === 'opportunities' && (
           <>
             <section className="hero">
@@ -693,7 +978,7 @@ export default function App() {
               <div className="sponsored-grid" aria-label="Sponsored campaigns">
                 {adCampaigns
                   .filter((campaign) => campaign.placements?.includes('homepage'))
-                  .map((campaign) => <SponsoredCampaign campaign={campaign} key={campaign.id} />)}
+                  .map((campaign) => <SponsoredCampaign campaign={campaign} onEvent={handleAdEvent} key={campaign.id} />)}
               </div>
             )}
             <section className="sponsored-placement sponsored-placement--empty" aria-label="Advertising opportunity">
@@ -702,7 +987,20 @@ export default function App() {
               <span className="sponsored-placement__copy">Ask the PR team about image, video, and text placements on ModLink.</span>
               <button className="sponsored-placement__cta button" type="button" onClick={() => { setContactTopic('advertising'); setActiveView('pr-contact'); }}>Ask about advertising ↗</button>
             </section>
-            {isSupabaseConfigured && <JobFeed jobs={jobs} ads={adCampaigns} focusListingId={focusListingId} onClearFocus={() => setFocusListingId(null)} loading={loading} user={session?.user} profile={profile} onApply={handleApply} onReport={handleReport} onSignIn={handleSignIn} />}
+            {isSupabaseConfigured && <JobFeed
+              jobs={jobs}
+              ads={adCampaigns}
+              focusListingId={focusListingId}
+              onOpenListing={handleOpenListing}
+              onCloseListing={handleClearListingFocus}
+              onAdEvent={handleAdEvent}
+              loading={loading}
+              user={session?.user}
+              profile={profile}
+              onApply={handleApply}
+              onReport={handleReport}
+              onSignIn={handleSignIn}
+            />}
             {!isSupabaseConfigured && (
               <p className="config-notice" role="status">
                 Supabase isn’t configured yet. Add <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> to <code>.env</code>, then restart Vite to enable accounts and live listings.
@@ -764,7 +1062,7 @@ export default function App() {
         )}
 
         {activeView === 'employer' && session && (
-          <EmployerPanel user={session.user} profile={profile} jobs={jobs} applications={ownedApplications} conversations={conversations} onStartChat={handleStartChat} onCreateJob={handleCreateJob} onUpdateJob={handleUpdateJob} onUpdateApplication={handleUpdateApplication} />
+          <EmployerPanel user={session.user} profile={profile} jobs={jobs} applications={ownedApplications} conversations={conversations} onStartChat={handleStartChat} onCreateJob={handleCreateJob} onUpdateJob={handleUpdateJob} onUpdateApplication={handleUpdateApplication} onRenewJob={handleRenewJob} />
         )}
         {activeView === 'profile' && session && (
           <ProfilePanel
@@ -775,6 +1073,8 @@ export default function App() {
             conversations={conversations}
             unreadCount={unreadCount}
             onSaveProfile={handleSaveProfile}
+            notificationPreferences={notificationPreferences}
+            onSaveNotificationPreferences={handleSaveNotificationPreferences}
             onNavigate={setActiveView}
           />
         )}
@@ -793,10 +1093,19 @@ export default function App() {
             profile={profile}
             inquiries={prInquiries}
             initialTopic={contactTopic}
+            affiliateReferralCode={affiliateReferralCode}
             onSignIn={handleSignIn}
             onSubmit={handleSubmitPrInquiry}
             onAnswer={handleAnswerPrInquiry}
             onRefresh={loadData}
+          />
+        )}
+        {activeView === 'affiliates' && (
+          <AffiliatePanel
+            dashboard={affiliateDashboard}
+            onApply={handleApplyAffiliate}
+            onSignIn={handleSignIn}
+            user={session?.user}
           />
         )}
         {activeView === 'messages' && session && (
@@ -829,7 +1138,7 @@ export default function App() {
               {applications.filter((application) => application.applicant_id === session.user.id).map((application) => (
                 <article className="panel application-row" key={application.id}>
                   <div className="application-row__copy"><h3>{application.job_listings?.role_title || 'Staff role'}</h3><p>{application.job_listings?.server_name}</p><small>Applied {new Date(application.created_at).toLocaleDateString()}</small></div>
-                  <span className={`state-pill state-pill--${application.status}`}>{application.status}</span>
+                  <span className={`state-pill state-pill--${application.status}`}>{{ pending: 'New', reviewing: 'Reviewing', interview: 'Interview', accepted: 'Accepted', rejected: 'Declined' }[application.status] || application.status}</span>
                 </article>
               ))}
               {!applications.some((application) => application.applicant_id === session.user.id) && <div className="empty-state"><h3>No applications yet</h3><p>Explore open opportunities and apply to find your next community.</p><button className="button button--primary" onClick={() => setActiveView('opportunities')}>Explore roles</button></div>}
@@ -849,6 +1158,13 @@ export default function App() {
               applications={applications}
               settings={settings}
               adCampaigns={adminAdCampaigns}
+              adCampaignStats={adCampaignStats}
+              webhookDeliveries={webhookDeliveries}
+              affiliateDashboard={ownerAffiliateDashboard}
+              onReviewAffiliateApplication={handleReviewAffiliateApplication}
+              onRecordAffiliateCommission={handleRecordAffiliateCommission}
+              onSetAffiliateCommissionStatus={handleSetAffiliateCommissionStatus}
+              onRefreshWebhookStatus={loadData}
               onCloseListing={(jobId) => handleAdminAction('moderator_close_listing', { target_listing_id: jobId }, 'Listing closed.')}
               onDeleteListing={(jobId) => handleAdminAction('moderator_delete_listing', { target_listing_id: jobId }, 'Listing permanently deleted.')}
               onWarn={(targetId, reason) => handleAdminAction('moderator_issue_warning', { target_user_id: targetId, warning_reason: reason }, 'Warning issued.')}

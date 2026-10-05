@@ -16,6 +16,7 @@ const NOTIFICATION_ICONS = {
   pr_role: '✦',
   pr_inquiry: '✉',
   pr_inquiry_update: '↗',
+  weekly_digest: '🗞️',
 };
 
 export default function NotificationsPanel({ notifications, onOpen, onMarkRead, onMarkAllRead, onReportStaffAction }) {

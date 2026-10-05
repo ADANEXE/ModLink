@@ -34,10 +34,53 @@ create table if not exists public.job_listings (
   server_name text not null,
   role_title text not null,
   description text not null default '',
+  category text not null default 'other' check (category in ('moderation', 'community', 'support', 'events', 'development', 'other')),
+  responsibilities text not null default '',
+  requirements text not null default '',
+  experience_level text not null default 'any' check (experience_level in ('any', 'entry', 'intermediate', 'experienced')),
+  time_commitment text not null default '',
+  location text not null default 'Remote' ,
+  compensation_type text not null default 'unspecified' check (compensation_type in ('unspecified', 'volunteer', 'unpaid', 'paid')),
+  compensation_details text not null default '',
   is_featured boolean not null default false,
   status text not null default 'open' check (status in ('open', 'closed', 'filled')),
+  expires_at timestamptz not null default (now() + interval '30 days'),
+  expired_at timestamptz,
+  last_reviewed_at timestamptz,
+  last_renewed_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+alter table public.job_listings
+  add column if not exists expires_at timestamptz not null default (now() + interval '30 days'),
+  add column if not exists expired_at timestamptz,
+  add column if not exists last_reviewed_at timestamptz,
+  add column if not exists last_renewed_at timestamptz,
+  add column if not exists category text not null default 'other',
+  add column if not exists responsibilities text not null default '',
+  add column if not exists requirements text not null default '',
+  add column if not exists experience_level text not null default 'any',
+  add column if not exists time_commitment text not null default '',
+  add column if not exists location text not null default 'Remote',
+  add column if not exists compensation_type text not null default 'unspecified',
+  add column if not exists compensation_details text not null default '';
+
+alter table public.job_listings
+  drop constraint if exists job_listings_category_check,
+  drop constraint if exists job_listings_experience_level_check,
+  drop constraint if exists job_listings_compensation_type_check,
+  drop constraint if exists job_listings_details_length_check;
+alter table public.job_listings
+  add constraint job_listings_category_check check (category in ('moderation', 'community', 'support', 'events', 'development', 'other')),
+  add constraint job_listings_experience_level_check check (experience_level in ('any', 'entry', 'intermediate', 'experienced')),
+  add constraint job_listings_compensation_type_check check (compensation_type in ('unspecified', 'volunteer', 'unpaid', 'paid')),
+  add constraint job_listings_details_length_check check (
+    char_length(responsibilities) <= 4000
+    and char_length(requirements) <= 4000
+    and char_length(time_commitment) <= 120
+    and char_length(location) between 2 and 100
+    and char_length(compensation_details) <= 250
+  );
 
 create table if not exists public.applications (
   id uuid primary key default gen_random_uuid(),
@@ -48,6 +91,12 @@ create table if not exists public.applications (
   created_at timestamptz not null default now(),
   unique (job_id, applicant_id)
 );
+
+alter table public.applications
+  drop constraint if exists applications_status_check;
+alter table public.applications
+  add constraint applications_status_check
+  check (status in ('pending', 'reviewing', 'interview', 'accepted', 'rejected'));
 
 alter table public.profiles
   add column if not exists suspended_until timestamptz,
@@ -114,6 +163,13 @@ create table if not exists public.notifications (
   read_at timestamptz
 );
 
+create table if not exists public.user_notification_preferences (
+  user_id uuid primary key references public.profiles (id) on delete cascade,
+  weekly_digest_enabled boolean not null default false,
+  role_keywords text[] not null default array[]::text[],
+  last_weekly_digest_at timestamptz
+);
+
 create table if not exists public.pr_inquiries (
   id uuid primary key default gen_random_uuid(),
   requester_id uuid not null references public.profiles (id) on delete cascade,
@@ -125,6 +181,51 @@ create table if not exists public.pr_inquiries (
   handled_by uuid references public.profiles (id) on delete set null,
   created_at timestamptz not null default now(),
   resolved_at timestamptz
+);
+
+alter table public.pr_inquiries
+  add column if not exists affiliate_code text;
+
+create table if not exists public.affiliate_program_applications (
+  user_id uuid primary key references public.profiles (id) on delete cascade,
+  reason text not null check (char_length(reason) between 20 and 1000),
+  promotion_channels text not null check (char_length(promotion_channels) between 5 and 500),
+  status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  reviewed_by uuid references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now(),
+  reviewed_at timestamptz
+);
+
+create table if not exists public.affiliate_accounts (
+  user_id uuid primary key references public.profiles (id) on delete cascade,
+  referral_code text not null unique check (referral_code ~ '^[a-f0-9]{12}$'),
+  status text not null default 'active' check (status in ('active', 'suspended')),
+  approved_by uuid references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.affiliate_referrals (
+  id uuid primary key default gen_random_uuid(),
+  affiliate_user_id uuid not null references public.affiliate_accounts (user_id) on delete cascade,
+  inquiry_id uuid not null unique references public.pr_inquiries (id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.affiliate_commissions (
+  id uuid primary key default gen_random_uuid(),
+  affiliate_user_id uuid not null references public.affiliate_accounts (user_id) on delete restrict,
+  referral_id uuid references public.affiliate_referrals (id) on delete set null,
+  description text not null check (char_length(description) between 3 and 200),
+  amount numeric(10, 2) not null check (amount > 0 and amount <= 1000000),
+  currency text not null default 'USD' check (currency = 'USD'),
+  status text not null default 'pending' check (status in ('pending', 'approved', 'paid', 'void')),
+  notes text not null default '' check (char_length(notes) <= 500),
+  created_by uuid references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now(),
+  reviewed_by uuid references public.profiles (id) on delete set null,
+  reviewed_at timestamptz,
+  paid_at timestamptz,
+  paid_by uuid references public.profiles (id) on delete set null
 );
 
 create table if not exists public.ad_campaigns (
@@ -150,6 +251,21 @@ create table if not exists public.ad_campaigns (
     media_type <> 'video'
     or media_url ~* '^https://[^[:space:]]+\.(mp4|webm|ogg)(\?[^[:space:]]*)?$'
   )
+);
+
+create table if not exists public.ad_campaign_daily_stats (
+  campaign_id uuid not null references public.ad_campaigns (id) on delete cascade,
+  stat_date date not null default current_date,
+  impressions bigint not null default 0 check (impressions >= 0),
+  clicks bigint not null default 0 check (clicks >= 0),
+  primary key (campaign_id, stat_date)
+);
+
+create table if not exists public.discord_webhook_deliveries (
+  request_id bigint primary key,
+  event_name text not null,
+  actor_name text,
+  queued_at timestamptz not null default now()
 );
 
 insert into public.ad_campaigns (
@@ -216,10 +332,20 @@ $$;
 
 create index if not exists job_listings_status_created_at_idx
   on public.job_listings (status, created_at desc);
+create index if not exists job_listings_expiry_idx
+  on public.job_listings (expires_at)
+  where status = 'open';
+create index if not exists job_listings_owner_created_idx
+  on public.job_listings (owner_id, created_at desc);
+create index if not exists job_listings_owner_open_role_idx
+  on public.job_listings (owner_id, lower(trim(server_name)), lower(trim(role_title)))
+  where status = 'open';
 create index if not exists applications_job_id_idx
   on public.applications (job_id);
 create index if not exists applications_applicant_id_idx
   on public.applications (applicant_id);
+create index if not exists applications_applicant_created_idx
+  on public.applications (applicant_id, created_at desc);
 create index if not exists moderation_reports_status_created_at_idx
   on public.moderation_reports (status, created_at);
 create index if not exists moderation_warnings_target_user_id_idx
@@ -230,9 +356,19 @@ create index if not exists pr_inquiries_status_created_at_idx
   on public.pr_inquiries (status, created_at desc);
 create index if not exists pr_inquiries_requester_created_at_idx
   on public.pr_inquiries (requester_id, created_at desc);
+create index if not exists affiliate_referrals_user_created_idx
+  on public.affiliate_referrals (affiliate_user_id, created_at desc);
+create index if not exists affiliate_commissions_user_created_idx
+  on public.affiliate_commissions (affiliate_user_id, created_at desc);
+create index if not exists affiliate_program_applications_status_created_idx
+  on public.affiliate_program_applications (status, created_at);
 create index if not exists ad_campaigns_active_created_idx
   on public.ad_campaigns (created_at desc)
   where is_active;
+create index if not exists ad_campaign_daily_stats_date_idx
+  on public.ad_campaign_daily_stats (stat_date desc);
+create index if not exists discord_webhook_deliveries_queued_at_idx
+  on public.discord_webhook_deliveries (queued_at desc);
 create index if not exists staff_action_log_created_at_idx
   on public.staff_action_log (created_at desc);
 create index if not exists chat_messages_conversation_expiry_idx
@@ -383,6 +519,263 @@ $$;
 
 revoke all on function public.current_is_pr_manager() from public;
 grant execute on function public.current_is_pr_manager() to authenticated;
+
+drop function if exists public.create_job_listing(text, text, text);
+create or replace function public.create_job_listing(
+  listing_server_name text,
+  listing_role_title text,
+  listing_description text,
+  listing_category text default 'other',
+  listing_responsibilities text default '',
+  listing_requirements text default '',
+  listing_experience_level text default 'any',
+  listing_time_commitment text default '',
+  listing_location text default 'Remote',
+  listing_compensation_type text default 'unspecified',
+  listing_compensation_details text default ''
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  new_listing_id uuid;
+  v_owner_id uuid := auth.uid();
+begin
+  if v_owner_id is null then
+    raise exception 'Sign in to post a listing';
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended(v_owner_id::text, 0));
+  if char_length(trim(coalesce(listing_server_name, ''))) not between 2 and 100
+    or char_length(trim(coalesce(listing_role_title, ''))) not between 3 and 100
+    or char_length(trim(coalesce(listing_description, ''))) not between 30 and 5000
+    or char_length(coalesce(listing_responsibilities, '')) > 4000
+    or char_length(coalesce(listing_requirements, '')) > 4000
+    or char_length(coalesce(listing_time_commitment, '')) > 120
+    or char_length(trim(coalesce(listing_location, ''))) not between 2 and 100
+    or char_length(coalesce(listing_compensation_details, '')) > 250 then
+    raise exception 'Enter complete listing details within the allowed lengths';
+  end if;
+  if listing_category not in ('moderation', 'community', 'support', 'events', 'development', 'other')
+    or listing_experience_level not in ('any', 'entry', 'intermediate', 'experienced')
+    or listing_compensation_type not in ('unspecified', 'volunteer', 'unpaid', 'paid') then
+    raise exception 'Choose valid listing categories and options';
+  end if;
+  if listing_compensation_type <> 'paid' and nullif(trim(coalesce(listing_compensation_details, '')), '') is not null then
+    raise exception 'Compensation details are only allowed for paid roles';
+  end if;
+  if exists (
+    select 1 from public.profiles
+    where profiles.id = v_owner_id
+      and profiles.is_suspended
+      and (profiles.suspended_until is null or profiles.suspended_until > now())
+  ) then
+    raise exception 'Your account is restricted from posting';
+  end if;
+  if (select count(*) from public.job_listings
+      where job_listings.owner_id = v_owner_id
+        and job_listings.created_at > now() - interval '24 hours') >= 3 then
+    raise exception 'You can publish up to 3 listings per 24 hours';
+  end if;
+  if (select count(*) from public.job_listings
+      where job_listings.owner_id = v_owner_id
+        and job_listings.status = 'open'
+        and job_listings.expires_at > now()) >= 5 then
+    raise exception 'You can have up to 5 open listings at a time';
+  end if;
+  if exists (
+    select 1 from public.job_listings
+    where job_listings.owner_id = v_owner_id
+      and job_listings.status = 'open'
+      and job_listings.expires_at > now()
+      and lower(trim(job_listings.server_name)) = lower(trim(listing_server_name))
+      and lower(trim(job_listings.role_title)) = lower(trim(listing_role_title))
+  ) then
+    raise exception 'You already have an open listing for this role and community';
+  end if;
+  insert into public.job_listings (
+    owner_id, server_name, role_title, description, category, responsibilities,
+    requirements, experience_level, time_commitment, location,
+    compensation_type, compensation_details
+  )
+  values (
+    v_owner_id, trim(listing_server_name), trim(listing_role_title), trim(listing_description),
+    listing_category, trim(coalesce(listing_responsibilities, '')),
+    trim(coalesce(listing_requirements, '')), listing_experience_level,
+    trim(coalesce(listing_time_commitment, '')), trim(listing_location),
+    listing_compensation_type, trim(coalesce(listing_compensation_details, ''))
+  )
+  returning id into new_listing_id;
+  return new_listing_id;
+end;
+$$;
+
+revoke all on function public.create_job_listing(text, text, text, text, text, text, text, text, text, text, text) from public;
+grant execute on function public.create_job_listing(text, text, text, text, text, text, text, text, text, text, text) to authenticated;
+
+create or replace function public.submit_job_application(target_job_id uuid, experience_text text)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_applicant uuid := auth.uid();
+  new_application_id uuid;
+begin
+  if v_applicant is null then
+    raise exception 'Sign in to apply';
+  end if;
+  if char_length(trim(coalesce(experience_text, ''))) not between 20 and 3000 then
+    raise exception 'Your experience summary must be between 20 and 3000 characters';
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended(v_applicant::text, 1));
+  if exists (
+    select 1 from public.profiles
+    where profiles.id = v_applicant
+      and profiles.is_suspended
+      and (profiles.suspended_until is null or profiles.suspended_until > now())
+  ) then
+    raise exception 'Your account is restricted from applying';
+  end if;
+  if not exists (
+    select 1 from public.job_listings
+    where job_listings.id = target_job_id
+      and job_listings.status = 'open'
+      and job_listings.expires_at > now()
+      and job_listings.expired_at is null
+  ) then
+    raise exception 'This listing is no longer accepting applications';
+  end if;
+  if (select count(*) from public.applications
+      where applications.applicant_id = v_applicant
+        and applications.created_at > now() - interval '24 hours') >= 10 then
+    raise exception 'You can submit up to 10 applications per 24 hours';
+  end if;
+  insert into public.applications (job_id, applicant_id, experience_summary)
+  values (target_job_id, v_applicant, trim(experience_text))
+  returning id into new_application_id;
+  return new_application_id;
+end;
+$$;
+
+revoke all on function public.submit_job_application(uuid, text) from public;
+grant execute on function public.submit_job_application(uuid, text) to authenticated;
+
+create or replace function public.renew_job_listing(target_listing_id uuid)
+returns timestamptz
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  renewal_expiry timestamptz;
+begin
+  if auth.uid() is null then
+    raise exception 'Sign in to renew a listing';
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended(auth.uid()::text, 0));
+  if not exists (
+    select 1 from public.job_listings
+    where job_listings.id = target_listing_id
+      and job_listings.owner_id = auth.uid()
+      and job_listings.expired_at is not null
+      and job_listings.status = 'closed'
+  ) then
+    raise exception 'Only an automatically expired listing can be renewed';
+  end if;
+  if exists (
+    select 1 from public.job_listings
+    where job_listings.id = target_listing_id
+      and job_listings.last_renewed_at > now() - interval '7 days'
+  ) then
+    raise exception 'A listing can only be renewed once every 7 days';
+  end if;
+  if (select count(*) from public.job_listings
+      where job_listings.owner_id = auth.uid()
+        and job_listings.status = 'open'
+        and job_listings.expires_at > now()) >= 5 then
+    raise exception 'Close another listing before renewing this one';
+  end if;
+  if exists (
+    select 1 from public.job_listings as current_listing
+    join public.job_listings as other_listing
+      on other_listing.owner_id = current_listing.owner_id
+      and other_listing.id <> current_listing.id
+    where current_listing.id = target_listing_id
+      and other_listing.status = 'open'
+      and other_listing.expires_at > now()
+      and lower(trim(other_listing.server_name)) = lower(trim(current_listing.server_name))
+      and lower(trim(other_listing.role_title)) = lower(trim(current_listing.role_title))
+  ) then
+    raise exception 'You already have an open listing for this role and community';
+  end if;
+  update public.job_listings
+  set status = 'open',
+      expired_at = null,
+      expires_at = now() + interval '30 days',
+      last_renewed_at = now()
+  where id = target_listing_id
+  returning expires_at into renewal_expiry;
+  return renewal_expiry;
+end;
+$$;
+
+revoke all on function public.renew_job_listing(uuid) from public;
+grant execute on function public.renew_job_listing(uuid) to authenticated;
+
+create or replace function public.record_ad_campaign_event(target_campaign_id uuid, event_kind text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if event_kind not in ('impression', 'click') then
+    raise exception 'Unsupported ad event';
+  end if;
+  insert into public.ad_campaign_daily_stats as existing_stats (campaign_id, stat_date, impressions, clicks)
+  select id, current_date,
+    case when event_kind = 'impression' then 1 else 0 end,
+    case when event_kind = 'click' then 1 else 0 end
+  from public.ad_campaigns
+  where id = target_campaign_id and is_active
+  on conflict (campaign_id, stat_date) do update
+    set impressions = existing_stats.impressions + excluded.impressions,
+        clicks = existing_stats.clicks + excluded.clicks;
+  if not found then
+    if event_kind = 'impression' then
+      return;
+    end if;
+    raise exception 'Campaign is not active';
+  end if;
+end;
+$$;
+
+revoke all on function public.record_ad_campaign_event(uuid, text) from public;
+grant execute on function public.record_ad_campaign_event(uuid, text) to anon, authenticated;
+
+create or replace function public.owner_ad_campaign_stats()
+returns table (campaign_id uuid, impressions bigint, clicks bigint)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if public.current_admin_level() < 6 then
+    raise exception 'Owner access required';
+  end if;
+  return query
+    select stats.campaign_id, sum(stats.impressions)::bigint, sum(stats.clicks)::bigint
+    from public.ad_campaign_daily_stats as stats
+    where stats.stat_date >= current_date - 29
+    group by stats.campaign_id;
+end;
+$$;
+
+revoke all on function public.owner_ad_campaign_stats() from public;
+grant execute on function public.owner_ad_campaign_stats() to authenticated;
 
 create or replace function public.admin_promotion_activity()
 returns table (actor_id uuid, casework_actions bigint)
@@ -783,9 +1176,42 @@ begin
     headers := '{"Content-Type":"application/json"}'::jsonb,
     timeout_milliseconds := 5000
   ) into request_id;
+  insert into public.discord_webhook_deliveries (request_id, event_name, actor_name)
+  values (request_id, event_name, nullif(actor_display_name, ''));
   return request_id;
 end;
 $$;
+
+create or replace function public.owner_recent_discord_webhook_deliveries()
+returns table (
+  request_id bigint,
+  event_name text,
+  actor_name text,
+  queued_at timestamptz,
+  status_code integer,
+  timed_out boolean,
+  error_msg text
+)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if public.current_admin_level() < 6 then
+    raise exception 'Owner access required';
+  end if;
+  return query
+    select delivery.request_id, delivery.event_name, delivery.actor_name,
+      delivery.queued_at, response.status_code, response.timed_out, response.error_msg
+    from public.discord_webhook_deliveries as delivery
+    left join net._http_response as response on response.id = delivery.request_id
+    order by delivery.queued_at desc
+    limit 20;
+end;
+$$;
+
+revoke all on function public.owner_recent_discord_webhook_deliveries() from public;
+grant execute on function public.owner_recent_discord_webhook_deliveries() to authenticated;
 
 create or replace function public.record_staff_action(
   action_name text,
@@ -826,6 +1252,18 @@ begin
     action_name,
     event_details
   );
+  if target_listing is not null and action_name in (
+    'listing_featured',
+    'listing_unfeatured',
+    'listing_closed',
+    'listing_deleted',
+    'report_reviewed',
+    'report_dismissed'
+  ) then
+    update public.job_listings
+    set last_reviewed_at = now()
+    where id = target_listing;
+  end if;
   perform public.queue_discord_admin_webhook(
     action_name,
     actor_display_name,
@@ -918,7 +1356,14 @@ begin
 end;
 $$;
 
-create or replace function public.submit_pr_inquiry(inquiry_topic text, inquiry_subject text, inquiry_message text)
+drop function if exists public.submit_pr_inquiry(text, text, text);
+drop function if exists public.submit_pr_inquiry(text, text, text, text);
+create or replace function public.submit_pr_inquiry(
+  inquiry_topic text,
+  inquiry_subject text,
+  inquiry_message text,
+  provided_referral_code text default null
+)
 returns uuid
 language plpgsql
 security definer
@@ -928,6 +1373,7 @@ declare
   new_inquiry_id uuid;
   manager record;
   recent_inquiries integer;
+  attributed_affiliate uuid;
 begin
   if auth.uid() is null then
     raise exception 'Sign in with Discord to contact the PR team';
@@ -939,6 +1385,21 @@ begin
     or char_length(trim(coalesce(inquiry_message, ''))) < 20
     or char_length(inquiry_message) > 2000 then
     raise exception 'Check the topic, subject, and message length';
+  end if;
+  if nullif(trim(coalesce(provided_referral_code, '')), '') is not null then
+    if inquiry_topic <> 'advertising' then
+      raise exception 'Affiliate referral codes can only be used for advertising inquiries';
+    end if;
+    select user_id into attributed_affiliate
+    from public.affiliate_accounts
+    where affiliate_accounts.referral_code = lower(trim(provided_referral_code))
+      and affiliate_accounts.status = 'active';
+    if not found then
+      raise exception 'This affiliate referral link is invalid or inactive';
+    end if;
+    if attributed_affiliate = auth.uid() then
+      raise exception 'You cannot use your own affiliate referral link';
+    end if;
   end if;
   perform profiles.id from public.profiles where profiles.id = auth.uid() for update;
   if not found then
@@ -962,9 +1423,16 @@ begin
   if recent_inquiries >= 3 then
     raise exception 'You can send up to three PR inquiries every 24 hours';
   end if;
-  insert into public.pr_inquiries (requester_id, topic, subject, message)
-  values (auth.uid(), inquiry_topic, trim(inquiry_subject), trim(inquiry_message))
+  insert into public.pr_inquiries (requester_id, topic, subject, message, affiliate_code)
+  values (
+    auth.uid(), inquiry_topic, trim(inquiry_subject), trim(inquiry_message),
+    case when attributed_affiliate is null then null else lower(trim(provided_referral_code)) end
+  )
   returning id into new_inquiry_id;
+  if attributed_affiliate is not null then
+    insert into public.affiliate_referrals (affiliate_user_id, inquiry_id)
+    values (attributed_affiliate, new_inquiry_id);
+  end if;
   for manager in
     select profiles.id
     from public.profiles
@@ -983,6 +1451,332 @@ begin
     );
   end loop;
   return new_inquiry_id;
+end;
+$$;
+
+create or replace function public.submit_affiliate_application(application_reason text, application_channels text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'Sign in to apply to the affiliate program';
+  end if;
+  if char_length(trim(coalesce(application_reason, ''))) not between 20 and 1000
+    or char_length(trim(coalesce(application_channels, ''))) not between 5 and 500 then
+    raise exception 'Tell us why you want to join and where you plan to share ModLink';
+  end if;
+  if exists (
+    select 1 from public.affiliate_accounts where user_id = auth.uid()
+  ) then
+    raise exception 'You are already an affiliate';
+  end if;
+  insert into public.affiliate_program_applications (user_id, reason, promotion_channels)
+  values (auth.uid(), trim(application_reason), trim(application_channels))
+  on conflict (user_id) do update
+    set reason = excluded.reason,
+        promotion_channels = excluded.promotion_channels,
+        status = 'pending',
+        reviewed_by = null,
+        reviewed_at = null
+  where public.affiliate_program_applications.status = 'rejected';
+  if not found then
+    raise exception 'An affiliate application is already pending or approved';
+  end if;
+end;
+$$;
+
+create or replace function public.my_affiliate_dashboard()
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  dashboard jsonb;
+begin
+  if auth.uid() is null then
+    raise exception 'Sign in to view your affiliate dashboard';
+  end if;
+  select jsonb_build_object(
+    'application', (
+      select jsonb_build_object(
+        'status', applications.status,
+        'reason', applications.reason,
+        'promotion_channels', applications.promotion_channels,
+        'created_at', applications.created_at,
+        'reviewed_at', applications.reviewed_at
+      )
+      from public.affiliate_program_applications as applications
+      where applications.user_id = auth.uid()
+    ),
+    'account', (
+      select jsonb_build_object(
+        'referral_code', accounts.referral_code,
+        'status', accounts.status,
+        'created_at', accounts.created_at
+      )
+      from public.affiliate_accounts as accounts
+      where accounts.user_id = auth.uid()
+    ),
+    'referral_count', (
+      select count(*) from public.affiliate_referrals
+      where affiliate_referrals.affiliate_user_id = auth.uid()
+    ),
+    'commissions', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'id', commissions.id,
+        'description', commissions.description,
+        'amount', commissions.amount,
+        'currency', commissions.currency,
+        'status', commissions.status,
+        'notes', commissions.notes,
+        'created_at', commissions.created_at,
+        'paid_at', commissions.paid_at,
+        'recorded_by', (select profiles.username from public.profiles where profiles.id = commissions.created_by),
+        'paid_by', (select profiles.username from public.profiles where profiles.id = commissions.paid_by)
+      ) order by commissions.created_at desc)
+      from public.affiliate_commissions as commissions
+      where commissions.affiliate_user_id = auth.uid()
+    ), '[]'::jsonb)
+  ) into dashboard;
+  return dashboard;
+end;
+$$;
+
+create or replace function public.owner_affiliate_dashboard()
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  dashboard jsonb;
+begin
+  if public.current_admin_level() < 6 then
+    raise exception 'Owner access required';
+  end if;
+  select jsonb_build_object(
+    'applications', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'user_id', requests.user_id,
+        'username', profiles.username,
+        'reason', requests.reason,
+        'promotion_channels', requests.promotion_channels,
+        'status', requests.status,
+        'created_at', requests.created_at
+      ) order by requests.created_at)
+      from public.affiliate_program_applications as requests
+      join public.profiles on profiles.id = requests.user_id
+      where requests.status = 'pending'
+    ), '[]'::jsonb),
+    'accounts', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'user_id', accounts.user_id,
+        'username', profiles.username,
+        'referral_code', accounts.referral_code,
+        'status', accounts.status,
+        'referral_count', (
+          select count(*) from public.affiliate_referrals as referrals
+          where referrals.affiliate_user_id = accounts.user_id
+        ),
+        'referrals', coalesce((
+          select jsonb_agg(jsonb_build_object(
+            'id', referrals.id,
+            'created_at', referrals.created_at,
+            'subject', inquiries.subject
+          ) order by referrals.created_at desc)
+          from public.affiliate_referrals as referrals
+          join public.pr_inquiries as inquiries on inquiries.id = referrals.inquiry_id
+          where referrals.affiliate_user_id = accounts.user_id
+        ), '[]'::jsonb)
+      ) order by profiles.username)
+      from public.affiliate_accounts as accounts
+      join public.profiles on profiles.id = accounts.user_id
+    ), '[]'::jsonb),
+    'commissions', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'id', commissions.id,
+        'affiliate_user_id', commissions.affiliate_user_id,
+        'username', profiles.username,
+        'referral_id', commissions.referral_id,
+        'description', commissions.description,
+        'amount', commissions.amount,
+        'currency', commissions.currency,
+        'status', commissions.status,
+        'notes', commissions.notes,
+        'created_at', commissions.created_at
+      ) order by commissions.created_at desc)
+      from public.affiliate_commissions as commissions
+      join public.profiles on profiles.id = commissions.affiliate_user_id
+    ), '[]'::jsonb)
+  ) into dashboard;
+  return dashboard;
+end;
+$$;
+
+create or replace function public.owner_review_affiliate_application(target_user_id uuid, decision text)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  generated_code text;
+begin
+  if public.current_admin_level() < 6 then
+    raise exception 'Owner access required';
+  end if;
+  if decision not in ('approve', 'reject') then
+    raise exception 'Choose approve or reject';
+  end if;
+  update public.affiliate_program_applications
+  set status = case when decision = 'approve' then 'approved' else 'rejected' end,
+      reviewed_by = auth.uid(),
+      reviewed_at = now()
+  where user_id = target_user_id and status = 'pending';
+  if not found then
+    raise exception 'Pending affiliate application not found';
+  end if;
+  if decision = 'approve' then
+    generated_code := substring(md5(gen_random_uuid()::text || clock_timestamp()::text) from 1 for 12);
+    insert into public.affiliate_accounts (user_id, referral_code, approved_by)
+    values (target_user_id, generated_code, auth.uid())
+    on conflict (user_id) do update
+      set status = 'active', approved_by = excluded.approved_by;
+  end if;
+  insert into public.notifications (user_id, actor_id, type, title, body)
+  values (
+    target_user_id, auth.uid(), 'affiliate_update',
+    case when decision = 'approve' then 'Affiliate application approved' else 'Affiliate application reviewed' end,
+    case when decision = 'approve'
+      then 'Your ModLink affiliate application was approved. Your referral link is ready in your Affiliate workspace.'
+      else 'Your ModLink affiliate application was not approved at this time.'
+    end
+  );
+  perform public.record_staff_action(
+    case when decision = 'approve' then 'affiliate_application_approved' else 'affiliate_application_rejected' end,
+    target_user_id,
+    (select profiles.username from public.profiles where profiles.id = target_user_id),
+    null,
+    jsonb_build_object('decision', decision)
+  );
+  return coalesce(generated_code, '');
+end;
+$$;
+
+create or replace function public.owner_record_affiliate_commission(
+  target_affiliate_user_id uuid,
+  target_referral_id uuid,
+  commission_description text,
+  commission_amount numeric,
+  commission_notes text default ''
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  commission_id uuid;
+  affiliate_name text;
+begin
+  if public.current_admin_level() < 6 then
+    raise exception 'Owner access required';
+  end if;
+  if char_length(trim(coalesce(commission_description, ''))) not between 3 and 200
+    or commission_amount is null or commission_amount <= 0 or commission_amount > 1000000
+    or char_length(coalesce(commission_notes, '')) > 500 then
+    raise exception 'Enter a valid commission description, USD amount, and optional note';
+  end if;
+  if not exists (
+    select 1 from public.affiliate_accounts
+    where user_id = target_affiliate_user_id and status = 'active'
+  ) then
+    raise exception 'Active affiliate account not found';
+  end if;
+  select profiles.username into affiliate_name
+  from public.profiles
+  where profiles.id = target_affiliate_user_id;
+  if target_referral_id is not null and not exists (
+    select 1 from public.affiliate_referrals
+    where id = target_referral_id and affiliate_user_id = target_affiliate_user_id
+  ) then
+    raise exception 'Referral does not belong to this affiliate';
+  end if;
+  insert into public.affiliate_commissions (
+    affiliate_user_id, referral_id, description, amount, notes, created_by
+  )
+  values (
+    target_affiliate_user_id, target_referral_id, trim(commission_description),
+    commission_amount, trim(coalesce(commission_notes, '')), auth.uid()
+  )
+  returning id into commission_id;
+  perform public.record_staff_action(
+    'affiliate_commission_recorded',
+    target_affiliate_user_id,
+    affiliate_name,
+    null,
+    jsonb_build_object(
+      'commission_id', commission_id,
+      'referral_id', target_referral_id,
+      'description', trim(commission_description),
+      'amount', commission_amount,
+      'currency', 'USD'
+    )
+  );
+  return commission_id;
+end;
+$$;
+
+create or replace function public.owner_set_affiliate_commission_status(target_commission_id uuid, new_status text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  target_affiliate_user_id uuid;
+  target_amount numeric;
+  affiliate_name text;
+begin
+  if public.current_admin_level() < 6 then
+    raise exception 'Owner access required';
+  end if;
+  if new_status not in ('approved', 'paid', 'void') then
+    raise exception 'Choose approved, paid, or void';
+  end if;
+  update public.affiliate_commissions
+  set status = new_status,
+      reviewed_by = auth.uid(),
+      reviewed_at = now(),
+      paid_by = case when new_status = 'paid' then auth.uid() else paid_by end,
+      paid_at = case when new_status = 'paid' then now() else paid_at end
+  where id = target_commission_id
+    and (
+      (status = 'pending' and new_status in ('approved', 'void'))
+      or (status = 'approved' and new_status in ('paid', 'void'))
+    )
+  returning affiliate_user_id, amount into target_affiliate_user_id, target_amount;
+  if not found then
+    raise exception 'Commission not found or already finalized';
+  end if;
+  select profiles.username into affiliate_name
+  from public.profiles
+  where profiles.id = target_affiliate_user_id;
+  perform public.record_staff_action(
+    'affiliate_commission_status_changed',
+    target_affiliate_user_id,
+    affiliate_name,
+    null,
+    jsonb_build_object(
+      'commission_id', target_commission_id,
+      'amount', target_amount,
+      'new_status', new_status
+    )
+  );
 end;
 $$;
 
@@ -1727,8 +2521,160 @@ begin
   delete from public.pr_inquiries
   where status = 'answered'
     and resolved_at <= now() - interval '30 days';
+  delete from public.discord_webhook_deliveries
+  where queued_at <= now() - interval '30 days';
+  delete from public.ad_campaign_daily_stats
+  where stat_date < current_date - 89;
 end;
 $$;
+
+create or replace function public.save_notification_preferences(
+  weekly_digest_enabled boolean,
+  role_keywords text[]
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  clean_keywords text[];
+  saved_preferences jsonb;
+begin
+  if auth.uid() is null then
+    raise exception 'Sign in to save notification preferences';
+  end if;
+  if coalesce(cardinality(role_keywords), 0) > 5 then
+    raise exception 'Choose no more than 5 role keywords';
+  end if;
+  select coalesce(array_agg(keyword order by keyword), array[]::text[])
+  into clean_keywords
+  from (
+    select distinct lower(trim(value)) as keyword
+    from unnest(coalesce(role_keywords, array[]::text[])) as item(value)
+    where trim(value) <> ''
+  ) as cleaned
+  where char_length(keyword) between 2 and 40;
+  if exists (
+    select 1 from unnest(coalesce(role_keywords, array[]::text[])) as item(value)
+    where trim(value) <> ''
+      and char_length(trim(value)) not between 2 and 40
+  ) then
+    raise exception 'Role keywords must contain 2 to 40 characters';
+  end if;
+  saved_preferences := jsonb_build_object(
+    'weekly_digest', coalesce(weekly_digest_enabled, false),
+    'role_keywords', to_jsonb(clean_keywords)
+  );
+  insert into public.user_notification_preferences (user_id, weekly_digest_enabled, role_keywords)
+  values (auth.uid(), coalesce(weekly_digest_enabled, false), clean_keywords)
+  on conflict (user_id) do update
+    set weekly_digest_enabled = excluded.weekly_digest_enabled,
+        role_keywords = excluded.role_keywords;
+  return saved_preferences;
+end;
+$$;
+
+revoke all on function public.save_notification_preferences(boolean, text[]) from public;
+grant execute on function public.save_notification_preferences(boolean, text[]) to authenticated;
+
+create or replace function public.cleanup_expired_job_listings()
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  closed_count integer;
+begin
+  update public.job_listings
+  set status = 'closed', expired_at = now()
+  where status = 'open'
+    and expires_at <= now()
+    and expired_at is null;
+  get diagnostics closed_count = row_count;
+  return closed_count;
+end;
+$$;
+
+revoke all on function public.cleanup_expired_job_listings() from public;
+grant execute on function public.cleanup_expired_job_listings() to postgres, service_role;
+
+create or replace function public.queue_weekly_role_digests()
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  member record;
+  digest_count integer := 0;
+  matching_count integer;
+  matching_roles text;
+begin
+  for member in
+    select preferences.user_id, preferences.role_keywords, preferences.last_weekly_digest_at
+    from public.user_notification_preferences as preferences
+    where preferences.weekly_digest_enabled
+      and (preferences.last_weekly_digest_at is null
+        or preferences.last_weekly_digest_at <= now() - interval '7 days')
+  loop
+    select count(*) into matching_count
+    from public.job_listings
+    where job_listings.status = 'open'
+      and job_listings.expires_at > now()
+      and job_listings.created_at > coalesce(member.last_weekly_digest_at, now() - interval '7 days')
+      and (
+        cardinality(member.role_keywords) = 0
+        or exists (
+          select 1 from unnest(member.role_keywords) as keywords(keyword)
+          where position(lower(keywords.keyword) in lower(
+            job_listings.role_title || ' ' || job_listings.server_name || ' ' || job_listings.description
+          )) > 0
+        )
+      );
+    select string_agg('• ' || recent.role_title || ' at ' || recent.server_name, E'\n')
+    into matching_roles
+    from (
+      select job_listings.role_title, job_listings.server_name
+      from public.job_listings
+      where job_listings.status = 'open'
+        and job_listings.expires_at > now()
+        and job_listings.created_at > coalesce(member.last_weekly_digest_at, now() - interval '7 days')
+        and (
+          cardinality(member.role_keywords) = 0
+          or exists (
+            select 1 from unnest(member.role_keywords) as keywords(keyword)
+            where position(lower(keywords.keyword) in lower(
+              job_listings.role_title || ' ' || job_listings.server_name || ' ' || job_listings.description
+            )) > 0
+          )
+        )
+      order by job_listings.created_at desc
+      limit 5
+    ) as recent;
+    if coalesce(matching_count, 0) > 0 then
+      insert into public.notifications (user_id, type, title, body, link_type)
+      values (
+        member.user_id,
+        'weekly_digest',
+        'Your weekly ModLink role digest',
+        matching_count || ' new role' || case when matching_count = 1 then '' else 's' end
+          || ' matched your interests:' || E'\n' || coalesce(matching_roles, ''),
+        'digest'
+      );
+      update public.user_notification_preferences
+      set last_weekly_digest_at = now()
+      where user_id = member.user_id;
+      digest_count := digest_count + 1;
+    end if;
+  end loop;
+  return digest_count;
+end;
+$$;
+
+revoke all on function public.queue_weekly_role_digests() from public;
+grant execute on function public.queue_weekly_role_digests() to postgres, service_role;
 
 create or replace function public.owner_set_site_setting(setting_key text, setting_value jsonb)
 returns void
@@ -1917,8 +2863,14 @@ $$;
 
 revoke all on function public.admin_set_member_level(uuid, integer) from public;
 revoke all on function public.owner_set_pr_manager(uuid, boolean) from public;
-revoke all on function public.submit_pr_inquiry(text, text, text) from public;
+revoke all on function public.submit_pr_inquiry(text, text, text, text) from public;
 revoke all on function public.answer_pr_inquiry(uuid, text) from public;
+revoke all on function public.submit_affiliate_application(text, text) from public;
+revoke all on function public.my_affiliate_dashboard() from public;
+revoke all on function public.owner_affiliate_dashboard() from public;
+revoke all on function public.owner_review_affiliate_application(uuid, text) from public;
+revoke all on function public.owner_record_affiliate_commission(uuid, uuid, text, numeric, text) from public;
+revoke all on function public.owner_set_affiliate_commission_status(uuid, text) from public;
 revoke all on function public.admin_set_moderator_verified(uuid, boolean) from public;
 revoke all on function public.admin_set_listing_featured(uuid, boolean) from public;
 revoke all on function public.moderator_close_listing(uuid) from public;
@@ -1936,8 +2888,14 @@ revoke all on function public.submit_chat_report(uuid, text) from public;
 revoke all on function public.cleanup_expired_chat_data() from public;
 grant execute on function public.admin_set_member_level(uuid, integer) to authenticated;
 grant execute on function public.owner_set_pr_manager(uuid, boolean) to authenticated;
-grant execute on function public.submit_pr_inquiry(text, text, text) to authenticated;
+grant execute on function public.submit_pr_inquiry(text, text, text, text) to authenticated;
 grant execute on function public.answer_pr_inquiry(uuid, text) to authenticated;
+grant execute on function public.submit_affiliate_application(text, text) to authenticated;
+grant execute on function public.my_affiliate_dashboard() to authenticated;
+grant execute on function public.owner_affiliate_dashboard() to authenticated;
+grant execute on function public.owner_review_affiliate_application(uuid, text) to authenticated;
+grant execute on function public.owner_record_affiliate_commission(uuid, uuid, text, numeric, text) to authenticated;
+grant execute on function public.owner_set_affiliate_commission_status(uuid, text) to authenticated;
 grant execute on function public.admin_set_moderator_verified(uuid, boolean) to authenticated;
 grant execute on function public.admin_set_listing_featured(uuid, boolean) to authenticated;
 grant execute on function public.moderator_close_listing(uuid) to authenticated;
@@ -1965,11 +2923,18 @@ alter table public.chat_messages enable row level security;
 alter table public.staff_action_log enable row level security;
 alter table public.pr_inquiries enable row level security;
 alter table public.ad_campaigns enable row level security;
+alter table public.ad_campaign_daily_stats enable row level security;
+alter table public.discord_webhook_deliveries enable row level security;
+alter table public.user_notification_preferences enable row level security;
+alter table public.affiliate_program_applications enable row level security;
+alter table public.affiliate_accounts enable row level security;
+alter table public.affiliate_referrals enable row level security;
+alter table public.affiliate_commissions enable row level security;
 
 grant select on public.profiles to authenticated;
 grant select on public.job_listings to anon, authenticated;
-grant delete on public.job_listings to authenticated;
-grant select, insert, update on public.applications to authenticated;
+grant select, update on public.applications to authenticated;
+revoke delete on public.job_listings, public.applications from authenticated;
 revoke all on public.moderation_reports from anon, authenticated;
 revoke all on public.moderation_warnings from anon, authenticated;
 revoke all on public.site_settings from anon, authenticated;
@@ -1979,6 +2944,12 @@ revoke all on public.chat_messages from anon, authenticated;
 revoke all on public.staff_action_log from anon, authenticated;
 revoke all on public.pr_inquiries from anon, authenticated;
 revoke all on public.ad_campaigns from anon, authenticated;
+revoke all on public.ad_campaign_daily_stats from anon, authenticated;
+revoke all on public.discord_webhook_deliveries from anon, authenticated;
+revoke all on public.affiliate_program_applications from anon, authenticated;
+revoke all on public.affiliate_accounts from anon, authenticated;
+revoke all on public.affiliate_referrals from anon, authenticated;
+revoke all on public.affiliate_commissions from anon, authenticated;
 grant select, insert on public.moderation_reports to authenticated;
 grant select on public.moderation_warnings to authenticated;
 grant select on public.site_settings to anon, authenticated;
@@ -1988,6 +2959,8 @@ grant select on public.chat_messages to authenticated;
 grant select on public.staff_action_log to authenticated;
 grant select on public.pr_inquiries to authenticated;
 grant select on public.ad_campaigns to anon, authenticated;
+revoke all on public.user_notification_preferences from anon, authenticated;
+grant select on public.user_notification_preferences to authenticated;
 
 -- Profile role and verification fields are managed by trusted server-side tooling.
 revoke update on public.profiles from authenticated;
@@ -1997,14 +2970,14 @@ grant update (discord_id, username, avatar_url, bio, portfolio_data)
 
 -- Featured listings and application decisions are not applicant-controlled.
 revoke insert, update on public.job_listings from authenticated;
-grant insert (owner_id, server_name, role_title, description)
-  on public.job_listings to authenticated;
+revoke insert (owner_id, server_name, role_title, description)
+  on public.job_listings from authenticated;
 grant update (server_name, role_title, description, status)
   on public.job_listings to authenticated;
 
 revoke insert, update on public.applications from authenticated;
-grant insert (job_id, applicant_id, experience_summary)
-  on public.applications to authenticated;
+revoke insert (job_id, applicant_id, experience_summary)
+  on public.applications from authenticated;
 grant update (status) on public.applications to authenticated;
 
 drop policy if exists "Authenticated users can read profiles" on public.profiles;
@@ -2121,6 +3094,11 @@ create policy "Users can read their notifications"
     and created_at > now() - interval '20 days'
   );
 
+drop policy if exists "Users can read their notification preferences" on public.user_notification_preferences;
+create policy "Users can read their notification preferences"
+  on public.user_notification_preferences for select to authenticated
+  using (user_id = (select auth.uid()));
+
 drop policy if exists "Users can mark their notifications read" on public.notifications;
 create policy "Users can mark their notifications read"
   on public.notifications for update to authenticated
@@ -2141,6 +3119,26 @@ create policy "Requesters and PR Managers can read PR inquiries"
     or (select public.current_is_pr_manager())
     or (select public.current_admin_level()) >= 6
   );
+
+drop policy if exists "Owners can read affiliate program data" on public.affiliate_program_applications;
+create policy "Owners can read affiliate program data"
+  on public.affiliate_program_applications for select to authenticated
+  using ((select public.current_admin_level()) >= 6);
+
+drop policy if exists "Owners can read affiliate accounts" on public.affiliate_accounts;
+create policy "Owners can read affiliate accounts"
+  on public.affiliate_accounts for select to authenticated
+  using ((select public.current_admin_level()) >= 6);
+
+drop policy if exists "Owners can read affiliate referrals" on public.affiliate_referrals;
+create policy "Owners can read affiliate referrals"
+  on public.affiliate_referrals for select to authenticated
+  using ((select public.current_admin_level()) >= 6);
+
+drop policy if exists "Owners can read affiliate commissions" on public.affiliate_commissions;
+create policy "Owners can read affiliate commissions"
+  on public.affiliate_commissions for select to authenticated
+  using ((select public.current_admin_level()) >= 6);
 
 drop policy if exists "Senior admins can read staff action history" on public.staff_action_log;
 create policy "Senior admins can read staff action history"
@@ -2174,23 +3172,16 @@ drop policy if exists "Anyone can read open job listings" on public.job_listings
 create policy "Anyone can read open job listings"
   on public.job_listings for select to anon, authenticated
   using (
-    status = 'open'
-    or (select auth.uid()) is not null
-    or (select public.current_admin_level()) >= 5
+    (
+      status = 'open'
+      and expires_at > now()
+      and expired_at is null
+    )
+    or owner_id = (select auth.uid())
+    or (select public.current_admin_level()) >= 1
   );
 
 drop policy if exists "Users can create job listings for themselves" on public.job_listings;
-create policy "Users can create job listings for themselves"
-  on public.job_listings for insert to authenticated
-  with check (
-    owner_id = (select auth.uid())
-    and is_featured = false
-    and exists (
-      select 1 from public.profiles
-      where profiles.id = (select auth.uid())
-        and (profiles.is_suspended = false or profiles.suspended_until <= now())
-    )
-  );
 
 drop policy if exists "Owners can update their job listings" on public.job_listings;
 create policy "Owners can update their job listings"
@@ -2199,9 +3190,6 @@ create policy "Owners can update their job listings"
   with check (owner_id = (select auth.uid()));
 
 drop policy if exists "Owners can delete their job listings" on public.job_listings;
-create policy "Owners can delete their job listings"
-  on public.job_listings for delete to authenticated
-  using (owner_id = (select auth.uid()));
 
 drop policy if exists "Applicants and listing owners can read applications" on public.applications;
 create policy "Applicants and listing owners can read applications"
@@ -2218,23 +3206,6 @@ create policy "Applicants and listing owners can read applications"
   );
 
 drop policy if exists "Users can apply as themselves to open jobs" on public.applications;
-create policy "Users can apply as themselves to open jobs"
-  on public.applications for insert to authenticated
-  with check (
-    applicant_id = (select auth.uid())
-    and status = 'pending'
-    and exists (
-      select 1 from public.profiles
-      where profiles.id = (select auth.uid())
-        and (profiles.is_suspended = false or profiles.suspended_until <= now())
-    )
-    and exists (
-      select 1
-      from public.job_listings
-      where job_listings.id = applications.job_id
-        and job_listings.status = 'open'
-    )
-  );
 
 drop policy if exists "Listing owners can update application status" on public.applications;
 create policy "Listing owners can update application status"
@@ -2268,6 +3239,21 @@ select cron.schedule(
   '*/15 * * * *',
   'select public.cleanup_expired_chat_data()'
 );
+select cron.unschedule(jobid)
+from cron.job
+where jobname in ('modlink-expire-job-listings', 'modlink-weekly-role-digests');
+
+select cron.schedule(
+  'modlink-expire-job-listings',
+  '*/15 * * * *',
+  'select public.cleanup_expired_job_listings()'
+);
+
+select cron.schedule(
+  'modlink-weekly-role-digests',
+  '0 12 * * 1',
+  'select public.queue_weekly_role_digests()'
+);
 
 -- Levels 0-6: User, Trial Mod, Jr Mod, Mod, Sr Mod, Sr Admin, Owner.
 
@@ -2281,10 +3267,17 @@ with required_tables(table_name) as (
     ('site_settings'),
     ('pr_inquiries'),
     ('notifications'),
+    ('user_notification_preferences'),
     ('chat_conversations'),
     ('chat_messages'),
     ('staff_action_log'),
-    ('ad_campaigns')
+    ('ad_campaigns'),
+    ('ad_campaign_daily_stats'),
+    ('discord_webhook_deliveries'),
+    ('affiliate_program_applications'),
+    ('affiliate_accounts'),
+    ('affiliate_referrals'),
+    ('affiliate_commissions')
 )
 select
   table_name,
@@ -2307,6 +3300,13 @@ where table_schema = 'public'
     'chat_conversations',
     'chat_messages',
     'staff_action_log',
-    'ad_campaigns'
+    'ad_campaigns',
+    'ad_campaign_daily_stats',
+    'discord_webhook_deliveries',
+    'user_notification_preferences',
+    'affiliate_program_applications',
+    'affiliate_accounts',
+    'affiliate_referrals',
+    'affiliate_commissions'
   )
 order by table_name, ordinal_position;
