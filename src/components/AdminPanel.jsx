@@ -28,14 +28,17 @@ function formatAuditValue(value) {
   return JSON.stringify(value);
 }
 
-function PermissionSection({ id, minLevel, profile, title, description, children }) {
+function PermissionSection({ id, minLevel, profile, title, description, defaultOpen = false, children }) {
   return (
     <AdminGuard minLevel={minLevel} profile={profile}>
-      <section className="admin-subsection" id={id}>
-        <div className="subsection-heading"><h3>{title}</h3><span>Level {minLevel}+</span></div>
+      <details className="admin-subsection admin-accordion" id={id} defaultOpen={defaultOpen}>
+        <summary className="admin-accordion__summary">
+          <span className="admin-accordion__title">{title}</span>
+          <span className="admin-accordion__meta">Level {minLevel}+ <span aria-hidden="true">⌄</span></span>
+        </summary>
         {description && <p className="admin-subsection__description">{description}</p>}
         {children}
-      </section>
+      </details>
     </AdminGuard>
   );
 }
@@ -197,6 +200,13 @@ export default function AdminPanel({
     setSaving(false);
   }
 
+  function openDashboardSection(event) {
+    const targetId = event.currentTarget.getAttribute('href')?.slice(1);
+    const target = targetId ? document.getElementById(targetId) : null;
+    const accordion = target?.closest('details');
+    if (accordion) accordion.open = true;
+  }
+
   return (
     <section className="workspace-section">
       <div className="section-heading">
@@ -208,14 +218,28 @@ export default function AdminPanel({
         <span className="admin-level-pill">Level {rank} · {ROLES[rank]}</span>
       </div>
       <div className={`admin-stat-grid${rank < 5 ? ' admin-stat-grid--compact' : ''}`}>
-        <a className="panel admin-stat" href="#admin-reports"><span>Needs review</span><strong>{pendingReports}</strong><small>Open moderation queue →</small></a>
+        <a className="panel admin-stat" href="#admin-reports" onClick={openDashboardSection}><span>Needs review</span><strong>{pendingReports}</strong><small>Open moderation queue →</small></a>
         <div className="panel admin-stat"><span>Your access</span><strong>{rank}</strong><small>{ROLES[rank]}</small></div>
-        {rank >= 2 && <a className="panel admin-stat" href="#admin-listings"><span>Open listings</span><strong>{openListings}</strong><small>Review job posts →</small></a>}
-        {rank >= 3 && <a className="panel admin-stat" href="#admin-members"><span>Active applications</span><strong>{activeApplications}</strong><small>Review staff & members →</small></a>}
-        {rank >= 5 && <a className="panel admin-stat" href="#admin-audit"><span>Staff actions · 30 days</span><strong>{staffActions.length}</strong><small>Review audit trail →</small></a>}
+        {rank >= 2 && <a className="panel admin-stat" href="#admin-listings" onClick={openDashboardSection}><span>Open listings</span><strong>{openListings}</strong><small>Review job posts →</small></a>}
+        {rank >= 3 && <a className="panel admin-stat" href="#admin-members" onClick={openDashboardSection}><span>Active applications</span><strong>{activeApplications}</strong><small>Review staff & members →</small></a>}
+        {rank >= 5 && <a className="panel admin-stat" href="#admin-audit" onClick={openDashboardSection}><span>Staff actions · 30 days</span><strong>{staffActions.length}</strong><small>Review audit trail →</small></a>}
       </div>
 
-      <PermissionSection id="admin-reports" minLevel={1} profile={currentProfile} title="Moderation queue" description="Search, filter, and review reports about listings and private chats.">
+      <nav className="admin-quick-nav" aria-label="Staff dashboard sections">
+        <span>Jump to</span>
+        <a href="#admin-reports" onClick={openDashboardSection}>Reports <b>{pendingReports}</b></a>
+        {rank >= 2 && <a href="#admin-listings" onClick={openDashboardSection}>Listings</a>}
+        {rank >= 3 && <a href="#admin-members" onClick={openDashboardSection}>Members</a>}
+        {rank >= 5 && <a href="#promotion-review-title" onClick={openDashboardSection}>Promotion review <b>{promotionCandidates.length}</b></a>}
+        {rank >= 5 && <a href="#admin-staff-management" onClick={openDashboardSection}>Staff access</a>}
+        {rank >= 5 && <a href="#admin-audit" onClick={openDashboardSection}>Audit log</a>}
+        {rank >= 6 && <a href="#admin-pr-managers" onClick={openDashboardSection}>PR access</a>}
+        {rank >= 6 && <a href="#admin-site-settings" onClick={openDashboardSection}>Site controls</a>}
+        {rank >= 6 && <a href="#admin-site-metrics" onClick={openDashboardSection}>Metrics</a>}
+        {rank >= 5 && <a href="#admin-broadcast" onClick={openDashboardSection}>Broadcast</a>}
+      </nav>
+
+      <PermissionSection id="admin-reports" minLevel={1} profile={currentProfile} title="Moderation queue" defaultOpen description="Search and review listing, chat, and eligible staff-conduct reports.">
         <div className="admin-filter-bar">
           <label className="search-field">
             <span className="sr-only">Search reports</span><span aria-hidden="true">⌕</span>
@@ -405,11 +429,11 @@ export default function AdminPanel({
       </PermissionSection>
 
       {rank >= 5 && (
-        <section className="admin-subsection promotion-review-section" aria-labelledby="promotion-review-title">
-          <div className="subsection-heading">
-            <h3 id="promotion-review-title">Promotion readiness</h3>
-            <span>{promotionCandidates.length} ready for review</span>
-          </div>
+        <details className="admin-subsection promotion-review-section admin-accordion" id="admin-promotion">
+          <summary className="admin-accordion__summary" id="promotion-review-title">
+            <span className="admin-accordion__title">Promotion readiness</span>
+            <span className="admin-accordion__meta">{promotionCandidates.length} ready for review <span aria-hidden="true">⌄</span></span>
+          </summary>
           <p className="admin-subsection__description">
             This is a review prompt, never an automatic promotion. The signal uses at least five recorded casework actions in the last 30 days and an active account. Senior staff must assess decision quality, context, and fairness before changing a rank.
           </p>
@@ -430,7 +454,7 @@ export default function AdminPanel({
           ) : (
             <div className="empty-state empty-state--compact"><p>No one currently meets the activity baseline for a promotion review.</p></div>
           )}
-        </section>
+        </details>
       )}
 
       <PermissionSection id="admin-staff-management" minLevel={5} profile={currentProfile} title="Verified moderators & staff access" description="Senior Admins can manage staff through Level 3. Owners can manage staff through Level 5. Higher-ranked staff and your own account are protected.">
@@ -467,7 +491,7 @@ export default function AdminPanel({
         </div>
       </PermissionSection>
 
-      <PermissionSection minLevel={6} profile={currentProfile} title="PR Manager access" description="Level 6 Owners can always access the PR inbox and reply, even without the PR Manager flag. Assign this separate role to other members who should help handle advertising, press, and partnership inquiries; it grants no moderation permissions. You may also toggle the flag on your own account to receive PR Manager notifications.">
+      <PermissionSection id="admin-pr-managers" minLevel={6} profile={currentProfile} title="PR Manager access" description="Level 6 Owners can always access the PR inbox and reply, even without the PR Manager flag. Assign this separate role to other members who should help handle advertising, press, and partnership inquiries; it grants no moderation permissions. You may also toggle the flag on your own account to receive PR Manager notifications.">
         <label className="search-field admin-directory-search">
           <span className="sr-only">Search PR Manager accounts</span><span aria-hidden="true">⌕</span>
           <input value={prManagerSearch} onChange={(event) => setPrManagerSearch(event.target.value)} placeholder="Find an account by name or Discord ID" />
@@ -540,7 +564,7 @@ export default function AdminPanel({
         </div>
       </PermissionSection>
 
-      <PermissionSection minLevel={6} profile={currentProfile} title="Site settings" description="Owner-only configuration visible only to Level 6.">
+      <PermissionSection id="admin-site-settings" minLevel={6} profile={currentProfile} title="Site controls & advertising" description="Owner-only settings. Update the public announcement, maintenance mode, or homepage sponsor placement.">
         <div className="panel maintenance-setting">
           <div>
             <strong>Maintenance mode</strong>
@@ -576,7 +600,7 @@ export default function AdminPanel({
         </form>
       </PermissionSection>
 
-      <PermissionSection minLevel={6} profile={currentProfile} title="Website metrics" description="Operational snapshot calculated from data already loaded for the staff workspace. Counts are not a privacy-safe unique visitor metric and no analytics events are written.">
+      <PermissionSection id="admin-site-metrics" minLevel={6} profile={currentProfile} title="Website metrics" description="Operational snapshot calculated from data already loaded for the staff workspace. Counts are not a privacy-safe unique visitor metric and no analytics events are written.">
         <div className="site-metrics-grid">
           <article className="panel site-metric"><span>Registered accounts</span><strong>{profiles.length}</strong></article>
           <article className="panel site-metric"><span>All listings</span><strong>{jobs.length}</strong></article>
@@ -590,7 +614,7 @@ export default function AdminPanel({
         <p className="site-metrics-note">For promotion and marketing decisions, use these operational counts alongside actual campaign data. This dashboard deliberately avoids per-visitor tracking, extra analytics tables, and high-volume database writes.</p>
       </PermissionSection>
 
-      <PermissionSection minLevel={5} profile={currentProfile} title="Community broadcast" description="Send a notice to every registered account. It will appear in their inbox immediately.">
+      <PermissionSection id="admin-broadcast" minLevel={5} profile={currentProfile} title="Community broadcast" description="Send a notice to every registered account. It will appear in their inbox immediately.">
         <form className="panel form-panel" onSubmit={sendBroadcast}>
           <label className="form-field">
             <span>Notification title</span>
