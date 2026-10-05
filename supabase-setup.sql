@@ -436,6 +436,11 @@ declare
   embed_description text;
   embed_color integer := 5793266;
   embed_fields jsonb;
+  embed_emoji text;
+  actor_rank_name text;
+  placement_summary text;
+  previous_rank_name text;
+  new_rank_name text;
   request_id bigint;
   setting_enabled boolean;
 begin
@@ -473,10 +478,18 @@ begin
     return null;
   end if;
 
-  select decrypted_secret into webhook_url
-  from vault.decrypted_secrets
-  where name = 'modlink_discord_webhook'
-  limit 1;
+  begin
+    select decrypted_secret into webhook_url
+    from vault.decrypted_secrets
+    where name = 'modlink_discord_webhook'
+    limit 1;
+  exception
+    when undefined_table or invalid_schema_name then
+      if require_webhook then
+        raise exception 'Enable Supabase Vault and add the modlink_discord_webhook secret before testing notifications';
+      end if;
+      return null;
+  end;
   if webhook_url is null then
     if require_webhook then
       raise exception 'Add the modlink_discord_webhook secret in Supabase Vault before testing notifications';
@@ -484,109 +497,261 @@ begin
     return null;
   end if;
   if webhook_url !~ '^https://(discord\.com|discordapp\.com)/api/webhooks/[0-9]+/[A-Za-z0-9._-]+$' then
-    raise exception 'The modlink_discord_webhook Vault secret must be a Discord webhook URL';
+    if require_webhook then
+      raise exception 'The modlink_discord_webhook Vault secret must be a Discord webhook URL';
+    end if;
+    return null;
   end if;
 
   if event_name = 'site_setting_changed' and event_details ->> 'setting_key' = 'maintenance_mode' then
     setting_enabled := (event_details ->> 'new_value')::boolean;
-    embed_title := case when setting_enabled then 'Maintenance mode enabled' else 'Maintenance mode disabled' end;
+    embed_emoji := case when setting_enabled then '🛠️' else '🟢' end;
+    embed_title := case
+      when setting_enabled then '🛠️  Maintenance mode enabled'
+      else '🟢  ModLink is back online'
+    end;
     embed_description := case
-      when setting_enabled then 'The public ModLink site has been placed into maintenance mode.'
-      else 'The public ModLink site is back online.'
+      when setting_enabled then 'The public site is now in maintenance mode. Visitors will see the maintenance page while the team works behind the scenes.'
+      else 'Maintenance mode has been switched off. The public site is available to the community again.'
     end;
     embed_color := case when setting_enabled then 15844367 else 5763719 end;
   else
-    embed_title := case event_name
+    embed_emoji := case event_name
+      when 'site_setting_changed' then '📣'
+      when 'staff_rank_changed' then '🎖️'
+      when 'pr_manager_role_changed' then '🤝'
+      when 'moderator_verified' then '✅'
+      when 'moderator_verification_removed' then '🔎'
+      when 'listing_featured' then '🌟'
+      when 'listing_unfeatured' then '📌'
+      when 'listing_closed' then '🔒'
+      when 'listing_deleted' then '🗑️'
+      when 'member_warned' then '⚠️'
+      when 'member_suspended' then '🚫'
+      when 'member_unsuspended' then '🔓'
+      when 'report_reviewed' then '🛡️'
+      when 'report_dismissed' then '📋'
+      when 'community_broadcast_sent' then '📢'
+      when 'ad_campaign_saved' then
+        case when coalesce((event_details ->> 'is_active')::boolean, false) then '🚀' else '⏸️' end
+      when 'ad_campaign_deleted' then '🧹'
+      when 'webhook_test' then '✨'
+      else '🔔'
+    end;
+    embed_title := embed_emoji || '  ' || case event_name
       when 'site_setting_changed' then 'Site announcement updated'
-      when 'staff_rank_changed' then 'Staff role changed'
-      when 'pr_manager_role_changed' then 'PR Manager access changed'
+      when 'staff_rank_changed' then 'Staff rank updated'
+      when 'pr_manager_role_changed' then
+        case when coalesce((event_details ->> 'new_value')::boolean, false)
+          then 'PR Manager access granted'
+          else 'PR Manager access removed'
+        end
       when 'moderator_verified' then 'Moderator verified'
-      when 'moderator_verification_removed' then 'Moderator verification removed'
+      when 'moderator_verification_removed' then 'Moderator verification updated'
       when 'listing_featured' then 'Listing featured'
       when 'listing_unfeatured' then 'Featured placement removed'
-      when 'listing_closed' then 'Listing closed'
+      when 'listing_closed' then 'Listing closed by staff'
       when 'listing_deleted' then 'Listing removed by staff'
-      when 'member_warned' then 'Member warning issued'
-      when 'member_suspended' then 'Member suspended'
+      when 'member_warned' then 'Moderation warning issued'
+      when 'member_suspended' then 'Member account suspended'
       when 'member_unsuspended' then 'Member suspension lifted'
-      when 'report_reviewed' then 'Moderation report reviewed'
-      when 'report_dismissed' then 'Moderation report dismissed'
+      when 'report_reviewed' then 'Report reviewed · action taken'
+      when 'report_dismissed' then 'Report reviewed · dismissed'
       when 'community_broadcast_sent' then 'Community announcement sent'
       when 'ad_campaign_saved' then
         case when coalesce((event_details ->> 'is_active')::boolean, false)
-          then 'Advertising campaign published or updated'
-          else 'Advertising campaign paused'
+          then 'Ad campaign published or updated'
+          else 'Ad campaign paused'
         end
-      when 'ad_campaign_deleted' then 'Advertising campaign deleted'
-      when 'webhook_test' then 'ModLink webhook test'
+      when 'ad_campaign_deleted' then 'Ad campaign removed'
+      when 'webhook_test' then 'Webhook connection test'
       else 'ModLink staff activity'
     end;
     embed_description := case event_name
-      when 'site_setting_changed' then 'A public site announcement was updated.'
-      when 'webhook_test' then 'Discord webhook notifications are connected to ModLink.'
+      when 'site_setting_changed' then 'A new announcement is now shown to visitors on the ModLink homepage.'
+      when 'staff_rank_changed' then 'A staff member’s access level was updated. The change is recorded in the staff audit log.'
+      when 'pr_manager_role_changed' then
+        case when coalesce((event_details ->> 'new_value')::boolean, false)
+          then 'A team member can now help manage partnership, press, and advertising inquiries.'
+          else 'PR Manager access has been removed from a team member.'
+        end
+      when 'moderator_verified' then 'A moderator’s profile has received the Verified Moderator badge.'
+      when 'moderator_verification_removed' then 'A Verified Moderator badge has been removed from a profile.'
+      when 'listing_featured' then 'This community opportunity now has featured placement on ModLink.'
+      when 'listing_unfeatured' then 'Featured placement has been removed from this community opportunity.'
+      when 'listing_closed' then 'A community opportunity has been closed following a staff review.'
+      when 'listing_deleted' then 'A community opportunity has been removed following a staff review.'
+      when 'member_warned' then 'A moderation warning was issued. Sensitive case details remain in the private staff workspace.'
+      when 'member_suspended' then 'A member account has been restricted from applying or posting. Sensitive case details remain private.'
+      when 'member_unsuspended' then 'A member’s account restriction has been lifted.'
+      when 'report_reviewed' then 'A report has been reviewed and action was recorded by the moderation team.'
+      when 'report_dismissed' then 'A report has been reviewed and dismissed by the moderation team.'
+      when 'community_broadcast_sent' then 'A community-wide update was delivered to member inboxes.'
+      when 'ad_campaign_saved' then
+        case when coalesce((event_details ->> 'is_active')::boolean, false)
+          then 'A sponsor campaign is live on the selected ModLink placement(s).'
+          else 'A sponsor campaign has been paused and is no longer shown publicly.'
+        end
+      when 'ad_campaign_deleted' then 'A sponsor campaign was permanently removed from the campaign manager.'
+      when 'webhook_test' then 'All set! The ModLink staff-alert connection can post to this channel.'
       else 'A staff action was completed in the ModLink dashboard.'
     end;
     embed_color := case
-      when event_name in ('member_suspended', 'listing_deleted', 'ad_campaign_deleted') then 15548997
-      when event_name in ('community_broadcast_sent', 'listing_featured', 'moderator_verified', 'ad_campaign_saved') then 5793266
+      when event_name in ('member_suspended', 'listing_deleted', 'ad_campaign_deleted', 'moderator_verification_removed') then 15548997
+      when event_name = 'ad_campaign_saved'
+        and coalesce((event_details ->> 'is_active')::boolean, false) then 5763719
+      when event_name = 'ad_campaign_saved' then 16753920
+      when event_name in ('community_broadcast_sent', 'listing_featured', 'moderator_verified', 'member_unsuspended') then 5763719
+      when event_name = 'site_setting_changed' then 10181046
       else 7506394
     end;
   end if;
 
+  actor_rank_name := case actor_level
+    when 0 then 'Member'
+    when 1 then 'Trial Mod'
+    when 2 then 'Junior Mod'
+    when 3 then 'Moderator'
+    when 4 then 'Senior Mod'
+    when 5 then 'Senior Admin'
+    when 6 then 'Owner'
+    else 'Staff'
+  end;
   embed_fields := jsonb_build_array(
     jsonb_build_object(
-      'name', 'Staff member',
-      'value', coalesce(nullif(actor_display_name, ''), 'Staff member')
-        || case when actor_level is null then '' else ' · Level ' || actor_level end,
+      'name', '👤  Action by',
+      'value', left(
+        coalesce(nullif(actor_display_name, ''), 'Staff member')
+          || case when actor_level is null then '' else ' · ' || actor_rank_name end,
+        200
+      ),
       'inline', true
     )
   );
   if nullif(target_display_name, '') is not null then
     embed_fields := embed_fields || jsonb_build_array(
-      jsonb_build_object('name', 'Member / listing owner', 'value', left(target_display_name, 200), 'inline', true)
+      jsonb_build_object('name', '🎯  Affected member / owner', 'value', left(target_display_name, 200), 'inline', true)
     );
   end if;
 
   if event_name = 'staff_rank_changed' then
+    previous_rank_name := case coalesce((event_details ->> 'previous_level')::integer, -1)
+      when 0 then 'Member'
+      when 1 then 'Trial Mod'
+      when 2 then 'Junior Mod'
+      when 3 then 'Moderator'
+      when 4 then 'Senior Mod'
+      when 5 then 'Senior Admin'
+      when 6 then 'Owner'
+      else 'Unknown'
+    end;
+    new_rank_name := case coalesce((event_details ->> 'new_level')::integer, -1)
+      when 0 then 'Member'
+      when 1 then 'Trial Mod'
+      when 2 then 'Junior Mod'
+      when 3 then 'Moderator'
+      when 4 then 'Senior Mod'
+      when 5 then 'Senior Admin'
+      when 6 then 'Owner'
+      else 'Unknown'
+    end;
     embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
-      'name', 'Rank change',
-      'value', coalesce(event_details ->> 'previous_level', '?') || ' → ' || coalesce(event_details ->> 'new_level', '?'),
+      'name', '🏅  Rank progression',
+      'value', previous_rank_name || '  →  ' || new_rank_name,
       'inline', true
+    ));
+  elsif event_name = 'pr_manager_role_changed' then
+    embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
+      'name', '🤝  PR access',
+      'value', case when coalesce((event_details ->> 'new_value')::boolean, false) then 'Granted' else 'Removed' end,
+      'inline', true
+    ));
+  elsif event_name in ('moderator_verified', 'moderator_verification_removed') then
+    embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
+      'name', '✅  Verification status',
+      'value', case when coalesce((event_details ->> 'verified')::boolean, false) then 'Verified' else 'Removed' end,
+      'inline', true
+    ));
+  elsif event_name = 'member_warned' then
+    embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
+      'name', '🧾  Case details',
+      'value', 'Available to staff in the private moderation workspace',
+      'inline', false
     ));
   elsif event_name = 'member_suspended' then
     embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
-      'name', 'Duration',
+      'name', '⏳  Restriction length',
       'value', case when (event_details ->> 'duration_hours')::integer < 0 then 'Permanent'
         else coalesce(event_details ->> 'duration_hours', '?') || ' hours' end,
       'inline', true
     ));
+    embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
+      'name', '🔒  Case details',
+      'value', 'Reason is kept private in the staff moderation workspace',
+      'inline', false
+    ));
+  elsif event_name = 'member_unsuspended' then
+    embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
+      'name', '🛡️  Staff record',
+      'value', 'Action and staff attribution saved to the audit log',
+      'inline', false
+    ));
   elsif event_name in ('listing_featured', 'listing_unfeatured', 'listing_closed', 'listing_deleted') then
     if nullif(event_details ->> 'role_title', '') is not null then
       embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
-        'name', 'Listing', 'value', left(event_details ->> 'role_title', 200), 'inline', true
+        'name', '📋  Opportunity', 'value', left(event_details ->> 'role_title', 200), 'inline', true
+      ));
+    end if;
+    if event_details ->> 'owner_level' is not null then
+      embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
+        'name', '🏠  Owner staff level',
+        'value', 'Level ' || left(event_details ->> 'owner_level', 2),
+        'inline', true
       ));
     end if;
   elsif event_name in ('ad_campaign_saved', 'ad_campaign_deleted') then
     if nullif(event_details ->> 'advertiser_name', '') is not null then
       embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
-        'name', 'Advertiser', 'value', left(event_details ->> 'advertiser_name', 100), 'inline', true
+        'name', '🏷️  Partner', 'value', left(event_details ->> 'advertiser_name', 100), 'inline', true
       ));
     end if;
     if nullif(event_details ->> 'title', '') is not null then
       embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
-        'name', 'Campaign', 'value', left(event_details ->> 'title', 200), 'inline', true
+        'name', '📣  Campaign', 'value', left(event_details ->> 'title', 200), 'inline', true
       ));
+    end if;
+    if event_details ? 'placements' and jsonb_typeof(event_details -> 'placements') = 'array' then
+      select string_agg(
+        case placement
+          when 'homepage' then 'Homepage'
+          when 'listing_feed' then 'Between listings'
+          else placement
+        end,
+        ' · '
+        order by placement
+      ) into placement_summary
+      from jsonb_array_elements_text(event_details -> 'placements') as item(placement);
+      if placement_summary is not null then
+        embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
+          'name', '📍  Placement', 'value', left(placement_summary, 200), 'inline', true
+        ));
+      end if;
     end if;
   elsif event_name in ('report_reviewed', 'report_dismissed') then
     embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
-      'name', 'Report type', 'value', coalesce(event_details ->> 'report_type', 'General'), 'inline', true
+      'name', '🗂️  Report category', 'value', left(coalesce(event_details ->> 'report_type', 'General'), 100), 'inline', true
+    ));
+    embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
+      'name', '🛡️  Staff record',
+      'value', 'Outcome and staff attribution saved to the audit log',
+      'inline', false
     ));
   elsif event_name = 'community_broadcast_sent' then
     embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
-      'name', 'Announcement', 'value', left(coalesce(event_details ->> 'title', ''), 200), 'inline', true
+      'name', '📢  Broadcast', 'value', left(coalesce(event_details ->> 'title', ''), 200), 'inline', true
     ));
     embed_fields := embed_fields || jsonb_build_array(jsonb_build_object(
-      'name', 'Recipients', 'value', coalesce(event_details ->> 'recipient_count', '0'), 'inline', true
+      'name', '👥  Members reached', 'value', coalesce(event_details ->> 'recipient_count', '0'), 'inline', true
     ));
   end if;
 
@@ -598,8 +763,20 @@ begin
       'embeds', jsonb_build_array(jsonb_build_object(
         'title', embed_title,
         'description', embed_description,
+        'url', 'https://adanexe.github.io/ModLink/',
         'color', embed_color,
         'fields', embed_fields,
+        'author', jsonb_build_object(
+          'name', 'MODLINK  •  STAFF OPERATIONS',
+          'url', 'https://adanexe.github.io/ModLink/',
+          'icon_url', 'https://adanexe.github.io/ModLink/modlink-mark.svg'
+        ),
+        'thumbnail', jsonb_build_object(
+          'url', 'https://adanexe.github.io/ModLink/modlink-mark.svg'
+        ),
+        'footer', jsonb_build_object(
+          'text', 'ModLink  •  Staff activity is attributed and recorded'
+        ),
         'timestamp', now()
       ))
     ),

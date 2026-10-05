@@ -18,7 +18,7 @@ A React/Vite Discord staff and moderator hiring hub using Supabase Auth and Post
 
 ### Discord staff alerts (optional)
 
-The Owner dashboard can queue Discord channel alerts when maintenance mode is switched on or off and for important staff events: rank/PR-role or verification changes, warnings and suspensions, listing feature/close/delete actions, moderation report outcomes, community broadcasts, and ad campaign publish/pause/delete actions. Public announcements also send an alert when their text changes. Messages include the acting staff member and relevant safe context; private report replies, warning reasons, webhook URLs, and announcement bodies are not sent. Requests are queued by Supabase `pg_net`, so delivery is asynchronous and never exposes the webhook URL in frontend code.
+The Owner dashboard can queue action-specific Discord embeds when maintenance mode is switched on or off and for important staff events: rank/PR-role or verification changes, warnings and suspensions, listing feature/close/delete actions, moderation report outcomes, community broadcasts, and ad campaign publish/pause/delete actions. Embeds use status colors, emoji headings, staff attribution, contextual fields, a ModLink identity, and event timestamps. Public announcements also send an alert when their text changes. Private report replies, warning reasons, webhook URLs, and announcement bodies are not sent. Requests are queued by Supabase `pg_net`, so delivery is asynchronous and never exposes the webhook URL in frontend code.
 
 1. In the Supabase Dashboard, open **Integrations → Vault** and add the Discord channel webhook URL as a secret named exactly `modlink_discord_webhook`. Keep the URL private. Do not paste it into the browser, website settings, GitHub, or a public SQL file.
 2. Open the Owner staff dashboard → **Site controls & advertising** and choose **Send test alert**. Check that the test appears in the intended Discord channel before relying on alerts.
@@ -31,7 +31,7 @@ The Owner dashboard can queue Discord channel alerts when maintenance mode is sw
    limit 20;
    ```
 
-Without the Vault secret, regular site/admin actions continue working but Discord alerts are skipped; the Owner’s test action reports that the secret is missing. Discord webhook delivery is best-effort and depends on Discord and Supabase network availability.
+Without the Vault secret or when Vault is not enabled, regular site/admin actions continue working but Discord alerts are skipped; the Owner’s test action reports the missing setup. After updating the embed design, rerun `supabase-setup.sql` so the database webhook function is refreshed. Discord webhook delivery is asynchronous and depends on Discord and Supabase network availability.
 
 The site supports browsing open listings, Discord sign-in, applying to roles, a personal dashboard with an editable introduction and portfolio link, tracking applications, publishing and managing listings, a searchable tiered moderation workspace, account notifications, private lister/applicant chats, and Owner-controlled maintenance mode. Applicants can share their profile bio and portfolio link with listing owners alongside applications.
 
