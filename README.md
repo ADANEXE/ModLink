@@ -35,7 +35,18 @@ The `Deploy frontend to GitHub Pages` workflow deploys the `main` branch to http
 - **Level 6 — Owner:** all staff controls, manage staff through Level 5, suspend accounts permanently or for up to a year, update site announcements/settings, and turn public maintenance mode on or off.
 - **PR Manager — separate assignment:** an Owner can assign this non-moderation role to any member (including their own account). PR Managers can review and answer advertising, press, and partnership inquiries but receive no moderation permissions. Level 6 Owners always have full PR inbox access whether or not they have this separate flag.
 
-Moderation RPCs enforce these levels in Postgres as well as in the UI. Report outcomes include a staff reply in the reporter's inbox; Senior Admins can broadcast a notice to all accounts. A private staff action history is visible only to Senior Admins and Owners and records the acting staff member's name, rank, target, and action for promotion reviews. The promotion panel flags active staff with at least five recorded casework actions in the rolling 30-day audit window for human review; this is an advisory activity threshold, not an automatic promotion or a measure of action quality. Senior staff should review the audit details and pending staff-conduct reports before using the staff access controls.
+Moderation RPCs enforce these levels in Postgres as well as in the UI. Report outcomes include a staff reply in the reporter's inbox; Senior Admins can broadcast a notice to all accounts. A private staff action history is visible only to Senior Admins and Owners and records the acting staff member's name, rank, target, and action.
+
+### Promotion recommendations
+
+The staff dashboard recommends a staff member for **human promotion review** when all of the following are true:
+
+- They are currently Level 1 or higher.
+- They have at least **five logged casework actions in the last 30 days**. Counted actions are resolving or dismissing a report, closing or deleting a listing, issuing a warning, and suspending or unsuspending a member.
+- They do not currently have an active suspension.
+- Their current level is within the viewing administrator's promotion authority. Level 5 Senior Admins see eligible Level 1–2 staff; Level 6 Owners see eligible Level 1–4 staff.
+
+The **Promotion readiness** section and dashboard badge are prompts to review—not a score of staff quality and not an automatic promotion. Senior staff should inspect the attributed actions and their context, consider any pending staff-conduct reports and fairness, and make any rank change manually using staff access controls. Meeting the activity threshold alone does not mean a promotion is deserved or guaranteed.
 
 Members can report a staff action from the related inbox notification. Staff-conduct reports are confidential: Level 5 staff can review reports about lower-ranked staff, and Level 6 Owners can review reports about staff below the Owner rank. A reported staff member cannot review their own report, and the report submitter cannot resolve it. Owner decisions have no higher site rank, so the inbox links those reports to the existing support channel.
 
